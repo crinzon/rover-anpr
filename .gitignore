@@ -1,0 +1,49 @@
+.venv/
+.tools/
+.work/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+generated/
+outputs/
+*.egg-info/
+.idea/
+*.pdf
+docs/
+
+real_plates*/
+pyproject.toml
+_bench_child.py
+
+# Локальные настройки и секреты
+.env
+.env.*
+!.env.example
+
+# База данных и журналы
+*.db
+*.db-shm
+*.db-wal
+*.log
+camera_log.txt
+visibility_log.csv
+
+# Снимки с камеры
+captures/
+
+# Резервные копии
+backups/
+
+# macOS
+.DS_Store
+
+# Настройки редактора
+.vscode/
+
+# Runtime
+.run/
+
+data/
+
+Makefile.bak
