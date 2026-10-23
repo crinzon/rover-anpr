@@ -62,3 +62,30 @@ Makefile.bak
 # Local model weights: redistribution rights not confirmed.
 /checkpoints/plate_detector.pt
 /checkpoints/plate_recognizer.pt
+
+# Generator glyph images: local resources, redistribution unconfirmed.
+/generator/assets/gost2018/0.png
+/generator/assets/gost2018/1.png
+/generator/assets/gost2018/2.png
+/generator/assets/gost2018/3.png
+/generator/assets/gost2018/4.png
+/generator/assets/gost2018/5.png
+/generator/assets/gost2018/6.png
+/generator/assets/gost2018/7.png
+/generator/assets/gost2018/8.png
+/generator/assets/gost2018/9.png
+/generator/assets/gost2018/A.png
+/generator/assets/gost2018/B.png
+/generator/assets/gost2018/C.png
+/generator/assets/gost2018/D.png
+/generator/assets/gost2018/E.png
+/generator/assets/gost2018/H.png
+/generator/assets/gost2018/K.png
+/generator/assets/gost2018/M.png
+/generator/assets/gost2018/O.png
+/generator/assets/gost2018/P.png
+/generator/assets/gost2018/RUS.png
+/generator/assets/gost2018/T.png
+/generator/assets/gost2018/TRANSIT.png
+/generator/assets/gost2018/X.png
+/generator/assets/gost2018/Y.png
