@@ -18,4 +18,20 @@ data
 *.log
 
 outputs
-real_plates2
+
+visibility_log.csv
+real_plates*
+generated
+tests/
+.pytest_cache
+.ruff_cache
+
+# Exclude private experiments, database journals and local backups.
+*.db-wal
+*.db-shm
+*.sqlite*
+*.bak
+*.tmp
+
+# Models are provided at runtime via a read-only mount.
+checkpoints/

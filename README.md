@@ -6,7 +6,7 @@ YOLO26n находит номера на изображении, OCR распо�
 
 ## Быстрый старт: запустить стенд
 
-Нужен Python 3.11+ (проверено на 3.14) и готовые веса `checkpoints/plate_detector.pt` и `checkpoints/plate_recognizer.pt`. Они находятся в текущей копии проекта.
+Нужен Python 3.11+ (проверено на 3.14) и готовые веса `checkpoints/plate_detector.pt` и `checkpoints/plate_recognizer.pt`. Веса не входят в репозиторий и отсутствуют в новом клоне. Разместите их локально по инструкции «Локальные веса моделей: не публиковать» ниже.
 
 Команды выполняются **из корня проекта в PowerShell**:
 
@@ -115,3 +115,96 @@ python full_stand/app.py `
 Откройте тот же адрес [http://127.0.0.1:8080](http://127.0.0.1:8080) и загрузите изображения для проверки.
 
 Полный список параметров доступен через `--help` у соответствующей команды.
+
+## Ровер: локальный запуск и Docker
+
+Локально (macOS/Linux): `make install` создаёт `.venv` и ставит
+`requirements.txt`. Подготовьте собственный `.env` по `.env.example`, затем
+`make run`; `make stop` останавливает процессы. На Mac оставьте `DEVICE=mps`,
+для CPU задайте `DEVICE=cpu`. Веса должны находиться в `checkpoints/`.
+`make purge` останавливает процессы и **удаляет `.run` с PID и логами**;
+база, снимки и веса сохраняются. Не запускайте очистку без необходимости.
+Инструменты качества устанавливаются отдельно:
+`.venv/bin/pip install -r requirements-dev.txt`; проверка — `make check`.
+
+Compose по умолчанию использует CPU и не требует GPU. Команды:
+
+```sh
+make docker-config
+make docker-install
+make docker-run
+make docker-stop
+```
+
+Для Ubuntu x86_64/NVIDIA нужен драйвер, совместимый с CUDA 12.6,
+NVIDIA Container Toolkit и Compose с поддержкой `gpus: all`:
+
+```sh
+make docker-config COMPOSE_FILES="-f compose.yaml -f compose.cuda.yaml"
+make docker-install COMPOSE_FILES="-f compose.yaml -f compose.cuda.yaml"
+make docker-run COMPOSE_FILES="-f compose.yaml -f compose.cuda.yaml"
+make docker-stop COMPOSE_FILES="-f compose.yaml -f compose.cuda.yaml"
+```
+
+В Docker MPS недоступен; Docker Desktop на Mac использует CPU. Доступ USB
+в контейнер автоматически не предоставляется: на Linux нужен отдельный
+локальный override с `devices` и группой устройства. На Mac USB-камеру
+используйте через локальный запуск либо выберите доступный RTSP-поток.
+
+Камера читает `.env` через Compose; этот файл не включается в образ.
+Для другого файла задайте `ANPR_ENV_FILE`. Для Hikvision укажите собственный
+RTSP URL в `VIDEO_SOURCE`; реальные адреса и пароли в README не размещаются.
+`VIDEO_RETRY_INITIAL`, `VIDEO_RETRY_MAX`, `VIDEO_OPERATION_TIMEOUT` управляют
+переподключением; `DELIVERY_*` — доставкой. В контейнере принудительно заданы
+внутренний адрес API, CPU/CUDA и отсутствие графического окна. Не публикуйте
+вывод обычного `docker compose config`: он может раскрыть секреты.
+`make docker-config` использует только `.env.example` и тихую проверку.
+
+API доступен на `127.0.0.1:8000`; `/health` подтверждает запуск HTTP-приложения
+после инициализации SQLite, но не проверяет камеру или качество OCR.
+Камера стартует после успешного healthcheck API; последующие сбои API
+обрабатывает очередь доставки. Оба сервиса перезапускаются `unless-stopped`.
+
+Контейнеры работают под UID/GID 10001. SQLite и снимки хранятся в именованных
+volumes `anpr-data` и `anpr-captures`, начальные права задаются образом.
+Существующие локальные `plates.db`, `data/` и `captures/` автоматически
+не переносятся. Для bind mounts заранее подготовьте права UID/GID 10001;
+не меняйте владельцев пользовательских данных вслепую.
+`make docker-stop` сохраняет volumes. `make docker-purge` удаляет контейнеры
+и локальные образы, но не volumes; `docker compose down -v` удаляет данные.
+
+Образ камеры явно копирует runtime-модули, `full_stand` и `ocr_model`.
+Модели подключаются через read-only volume. Генератор и датасеты не нужны.
+Основные Docker-зависимости
+закреплены по версиям локального окружения; транзитивные зависимости,
+базовые образы и apt-пакеты пока не зафиксированы по хешам. Это ещё не полный
+lock для воспроизводимой сборки. Образы не проверены сборкой в текущей среде;
+совместимость CUDA и производительность требуют проверки на целевой машине.
+
+
+## Локальные веса моделей: не публиковать
+
+Checkpoint не входят в Git, Docker build context, образ или release-артефакты.
+Права распространения пока не подтверждены. Получите оба файла из своего
+разрешённого локального источника; автоматическое скачивание не настроено.
+Создайте каталог `checkpoints` в корне проекта и вручную разместите:
+
+- `checkpoints/plate_detector.pt`
+- `checkpoints/plate_recognizer.pt`
+
+На Ubuntu: `mkdir -p checkpoints`, затем скопируйте файлы локально.
+На Windows PowerShell: `New-Item -ItemType Directory -Force checkpoints`,
+затем скопируйте файлы через проводник или `Copy-Item`.
+Для локального запуска пути одинаковы на Windows и Ubuntu; Makefile требует
+POSIX shell, поэтому на Windows используйте WSL либо команды Python из README.
+Устройство задаётся через DEVICE: cpu/cuda, на локальном Mac — mps.
+
+Compose подключает `./checkpoints` к `/app/checkpoints` только для чтения.
+Каталог должен существовать до запуска, файлы должны быть доступны UID 10001
+на чтение (и каталоги — на проход). Не меняйте владельцев исходных весов
+вслепую. Сборка образа не требует файлов моделей; запуск OCR без них завершится
+ошибкой проверки путей. Для standalone Docker используйте эквивалент
+`--mount type=bind,source=/absolute/path/checkpoints,target=/app/checkpoints,readonly`.
+Не добавляйте веса в Releases, архивы рабочего каталога или слои образа.
+Локальные контрольные суммы можно сверить `sha256sum checkpoints/*.pt`
+(Ubuntu) или `Get-FileHash checkpoints/*.pt -Algorithm SHA256` (PowerShell).

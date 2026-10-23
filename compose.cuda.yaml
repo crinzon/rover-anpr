@@ -1,0 +1,10 @@
+# Ubuntu/NVIDIA override; requires NVIDIA Container Toolkit.
+services:
+  camera:
+    platform: linux/amd64
+    build:
+      args:
+        TORCH_INDEX: https://download.pytorch.org/whl/cu126
+    environment:
+      DEVICE: cuda
+    gpus: all

@@ -1,5 +1,7 @@
 PYTHON := .venv/bin/python
 PIP := .venv/bin/pip
+COMPOSE := docker compose
+COMPOSE_FILES ?= -f compose.yaml
 
 .PHONY: install run stop purge
 
@@ -38,13 +40,32 @@ purge: stop
 .PHONY: docker-install docker-run docker-stop docker-purge
 
 docker-install:
-	docker compose build
+	$(COMPOSE) $(COMPOSE_FILES) build
 
 docker-run:
-	docker compose up -d
+	$(COMPOSE) $(COMPOSE_FILES) up -d
 
 docker-stop:
-	docker compose down
+	$(COMPOSE) $(COMPOSE_FILES) down
 
 docker-purge:
-	docker compose down --rmi local --remove-orphans
+	$(COMPOSE) $(COMPOSE_FILES) down --rmi local --remove-orphans
+
+# Install quality tools separately: .venv/bin/pip install -r requirements-dev.txt
+.PHONY: lint format-check test check
+
+lint:
+	$(PYTHON) -m ruff check .
+
+format-check:
+	$(PYTHON) -m ruff format --check .
+
+test:
+	$(PYTHON) -m pytest
+
+check: lint format-check test
+
+# Quiet validation using public values; never load private .env.
+.PHONY: docker-config
+docker-config:
+	ANPR_ENV_FILE=.env.example $(COMPOSE) --env-file .env.example $(COMPOSE_FILES) config --quiet

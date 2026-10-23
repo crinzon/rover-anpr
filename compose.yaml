@@ -8,23 +8,43 @@ services:
     environment:
       DB_PATH: /app/data/plates.db
     volumes:
-      - ./data:/app/data
-      - ./captures:/app/captures
+      - anpr-data:/app/data
+      - anpr-captures:/app/captures
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).close()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    init: true
     restart: unless-stopped
+    stop_grace_period: 15s
 
   camera:
     build:
       context: .
       dockerfile: docker/camera/Dockerfile
     env_file:
-      - .env
+      - ${ANPR_ENV_FILE:-.env}
     environment:
       API_URL: http://api:8000/plates
-      DEVICE: cuda
+      DEVICE: cpu
       SHOW_WINDOW: "false"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     volumes:
-      - ./captures:/app/captures
-    gpus: all
+      - anpr-captures:/app/captures
+      - type: bind
+        source: ./checkpoints
+        target: /app/checkpoints
+        read_only: true
+        bind:
+          create_host_path: false
+    init: true
     restart: unless-stopped
+    stop_grace_period: 15s
+
+volumes:
+  anpr-data:
+  anpr-captures:

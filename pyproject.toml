@@ -1,0 +1,20 @@
+# This stage checks rover entrypoints and isolated tests only.
+# full_stand and ocr_model are runtime dependencies, not claimed lint-clean.
+[tool.ruff]
+target-version = "py311"
+line-length = 79
+include = ["camera.py", "video_stream.py", "event_sender.py", "api.py", "database.py", "plate_validator.py", "tests/test_*.py"]
+extend-exclude = [".venv", "backups", "captures", "checkpoints", "outputs", "generated", "real_plates*", "generator", "detector", "ocr_model", "full_stand", "test_clahe.py"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N"]
+
+# OpenCV-compatible fake interface; matches VideoCapture.isOpened().
+[tool.ruff.lint.per-file-ignores]
+"tests/test_video_stream.py" = ["N802"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["."]
+addopts = "--strict-config --strict-markers"

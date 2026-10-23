@@ -13,7 +13,6 @@ outputs/
 docs/
 
 real_plates*/
-pyproject.toml
 _bench_child.py
 
 # Локальные настройки и секреты
@@ -47,3 +46,19 @@ backups/
 data/
 
 Makefile.bak
+
+# Private manual image experiments; keep files locally.
+/tests/test.jpg
+/tests/test_clahe.jpg
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.bak
+*.tmp
+
+# Local model weights: redistribution rights not confirmed.
+/checkpoints/plate_detector.pt
+/checkpoints/plate_recognizer.pt

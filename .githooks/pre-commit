@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+
+# Повышаем PATCH-версию только при наличии изменений для коммита.
+if git diff --cached --quiet; then
+    exit 0
+fi
+
+if [ ! -f VERSION ]; then
+    echo "Ошибка: файл VERSION не найден"
+    exit 1
+fi
+
+version=$(cat VERSION)
+
+case "$version" in
+    *.*.*) ;;
+    *) echo "Неверный формат версии: $version"; exit 1 ;;
+esac
+
+major=${version%%.*}
+rest=${version#*.}
+minor=${rest%%.*}
+patch=${rest##*.}
+
+case "$major:$minor:$patch" in
+    *[!0-9:]* | :* | *::*) echo "Неверный формат версии"; exit 1 ;;
+esac
+
+patch=$((patch + 1))
+new_version="$major.$minor.$patch"
+
+printf '%s\n' "$new_version" > VERSION
+git add VERSION
+
+echo "Версия обновлена: $version -> $new_version"
