@@ -10,7 +10,11 @@ outputs/
 *.egg-info/
 .idea/
 *.pdf
-docs/
+/docs/*
+!/docs/web-stand.md
+!/docs/data-and-training.md
+!/docs/deployment.md
+!/docs/local-resources.md
 
 real_plates*/
 _bench_child.py
