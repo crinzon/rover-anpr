@@ -1,95 +1,60 @@
-.venv/
-.tools/
-.work/
-__pycache__/
-.pytest_cache/
-.ruff_cache/
-*.pyc
-generated/
-outputs/
-*.egg-info/
-.idea/
-*.pdf
-/docs/*
-!/docs/web-stand.md
-!/docs/data-and-training.md
-!/docs/deployment.md
-!/docs/local-resources.md
-
-real_plates*/
-_bench_child.py
-
-# Локальные настройки и секреты
+# Secrets and local application metadata
 .env
 .env.*
 !.env.example
-
-# База данных и журналы
-*.db
-*.db-shm
-*.db-wal
-*.log
-camera_log.txt
-visibility_log.csv
-
-# Снимки с камеры
-captures/
-
-# Резервные копии
-backups/
-
-# macOS
+.aws/
+.codex/
+.agents/
+.vscode/
+.idea/
 .DS_Store
 
-# Настройки редактора
-.vscode/
-
-# Runtime
+# Environments, caches and generated files
+.venv/
+.tools/
+.work/
 .run/
-
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+backups/
+generated/
+outputs/
 data/
-
-Makefile.bak
-
-# Private manual image experiments; keep files locally.
-/tests/test.jpg
-/tests/test_clahe.jpg
-*.sqlite
-*.sqlite3
-*.sqlite-wal
-*.sqlite-shm
-*.sqlite3-wal
-*.sqlite3-shm
+captures/
+real_plates*/
+*.log
+visibility_log.csv
+*.db
+*.db-*
+*.sqlite*
 *.bak
 *.tmp
+*.pdf
+_bench_child.py
+/tests/test.jpg
+/tests/test_clahe.jpg
 
-# Local model weights: redistribution rights not confirmed.
-/checkpoints/plate_detector.pt
-/checkpoints/plate_recognizer.pt
+# Private source videos, crops, model weights and immutable experiment artifacts
+/test_videos/
+/evaluation_results/
+/checkpoints/
+*.MOV
+*.mov
+*.mp4
+*.pt
 
-# Generator glyph images: local resources, redistribution unconfirmed.
-/generator/assets/gost2018/0.png
-/generator/assets/gost2018/1.png
-/generator/assets/gost2018/2.png
-/generator/assets/gost2018/3.png
-/generator/assets/gost2018/4.png
-/generator/assets/gost2018/5.png
-/generator/assets/gost2018/6.png
-/generator/assets/gost2018/7.png
-/generator/assets/gost2018/8.png
-/generator/assets/gost2018/9.png
-/generator/assets/gost2018/A.png
-/generator/assets/gost2018/B.png
-/generator/assets/gost2018/C.png
-/generator/assets/gost2018/D.png
-/generator/assets/gost2018/E.png
-/generator/assets/gost2018/H.png
-/generator/assets/gost2018/K.png
-/generator/assets/gost2018/M.png
-/generator/assets/gost2018/O.png
-/generator/assets/gost2018/P.png
-/generator/assets/gost2018/RUS.png
-/generator/assets/gost2018/T.png
-/generator/assets/gost2018/TRANSIT.png
-/generator/assets/gost2018/X.png
-/generator/assets/gost2018/Y.png
+# Research is kept on disk, outside the published runtime repository
+/generator/
+/detector/
+/ocr_model/run_training.py
+/ocr_model/tests/
+/ocr_model/utils/dataset.py
+/ocr_model/utils/ema.py
+/ocr_model/utils/optimizer.py
+/ocr_model/utils/samples.py
+/ocr_model/utils/train.py
+/docs/data-and-training.md
+/docs/local-resources.md

@@ -5,11 +5,14 @@ import threading
 import time
 import types
 import unittest
+from collections import deque
 from pathlib import Path
 
 
 class CameraFramesTest(unittest.TestCase):
-    def run_worker(self, encode_ok=True, inference_error=False):
+    def run_worker(
+        self, encode_ok=True, inference_error=False, detection=False
+    ):
         source = Path(__file__).resolve().parents[1] / "camera.py"
         tree = ast.parse(source.read_text())
         worker = next(
@@ -20,6 +23,7 @@ class CameraFramesTest(unittest.TestCase):
         condition = threading.Condition()
         calls = []
         attempted = threading.Event()
+        previews = []
 
         class Frame:
             shape = (100, 200, 3)
@@ -35,10 +39,34 @@ class CameraFramesTest(unittest.TestCase):
         def pipeline(payload):
             if inference_error:
                 raise ValueError("synthetic failure")
-            return {"plates": [], "timing_ms": {"total": 0}}
+            plates = (
+                [
+                    dict(
+                        box=[1, 2, 30, 20],
+                        text="",
+                        confidence=0.2,
+                        readable=False,
+                    )
+                ]
+                if detection
+                else []
+            )
+            return {"plates": plates, "timing_ms": {"total": 0}}
 
         state = dict(
             running=True,
+            replay=None,
+            latest_media_timestamp=0.0,
+            deque=deque,
+            normalize_plate=lambda value: value,
+            ocr_threshold=0.85,
+            diagnostics=types.SimpleNamespace(
+                due=lambda: False, error=lambda *a: None
+            ),
+            preview=types.SimpleNamespace(
+                set_inference_error=lambda *a: None,
+                update_results=lambda *a, **k: previews.append(a),
+            ),
             frame_ready=condition,
             lock=condition,
             latest_frame=None,
@@ -86,6 +114,15 @@ class CameraFramesTest(unittest.TestCase):
                 condition.notify_all()
             thread.join(1)
         self.assertFalse(thread.is_alive())
+        if encode_ok and not inference_error:
+            self.assertEqual(len(previews), 3)
+            for preview in previews:
+                self.assertEqual(len(preview[0]), 1 if detection else 0)
+                if detection:
+                    self.assertFalse(preview[0][0]["confirmed"])
+
+    def test_unreadable_detection_still_has_live_box(self):
+        self.run_worker(detection=True)
 
     def test_each_frame_once(self):
         self.run_worker()

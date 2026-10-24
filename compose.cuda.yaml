@@ -4,7 +4,7 @@ services:
     platform: linux/amd64
     build:
       args:
-        TORCH_INDEX: https://download.pytorch.org/whl/cu126
+        TORCH_INDEX: https://download.pytorch.org/whl/cu128
     environment:
       DEVICE: cuda
     gpus: all

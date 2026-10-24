@@ -1,36 +1,28 @@
 #!/bin/sh
 set -eu
+cd "$(git rev-parse --show-toplevel)"
 
-# Повышаем PATCH-версию только при наличии изменений для коммита.
+# A retry or an explicit version change must not bump the same commit twice.
 if git diff --cached --quiet; then
     exit 0
 fi
-
-if [ ! -f VERSION ]; then
-    echo "Ошибка: файл VERSION не найден"
+if ! git diff --quiet -- VERSION; then
+    echo "VERSION has unstaged edits; stage or restore them before committing." >&2
     exit 1
 fi
-
 version=$(cat VERSION)
-
-case "$version" in
-    *.*.*) ;;
-    *) echo "Неверный формат версии: $version"; exit 1 ;;
-esac
-
+if ! printf '%s\n' "$version" | LC_ALL=C grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+    echo "VERSION must contain MAJOR.MINOR.PATCH." >&2
+    exit 1
+fi
+if ! git diff --cached --quiet -- VERSION; then
+    exit 0
+fi
 major=${version%%.*}
 rest=${version#*.}
 minor=${rest%%.*}
-patch=${rest##*.}
-
-case "$major:$minor:$patch" in
-    *[!0-9:]* | :* | *::*) echo "Неверный формат версии"; exit 1 ;;
-esac
-
-patch=$((patch + 1))
-new_version="$major.$minor.$patch"
-
-printf '%s\n' "$new_version" > VERSION
-git add VERSION
-
-echo "Версия обновлена: $version -> $new_version"
+patch=${rest#*.}
+printf '%s.%s.%s\n' "$major" "$minor" "$((patch + 1))" > VERSION
+git add -- VERSION
+# Never invoke git commit from a hook.
+printf 'Version: %s -> %s\n' "$version" "$(cat VERSION)"

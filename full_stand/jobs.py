@@ -8,11 +8,11 @@ from typing import Deque, Dict, List, Optional, Set
 
 from full_stand.pipeline import PlatePipeline
 
-QUEUED: str = 'queued'
-RUNNING: str = 'running'
-DONE: str = 'done'
-FAILED: str = 'failed'
-CANCELLED: str = 'cancelled'
+QUEUED: str = "queued"
+RUNNING: str = "running"
+DONE: str = "done"
+FAILED: str = "failed"
+CANCELLED: str = "cancelled"
 
 TERMINAL: frozenset = frozenset((DONE, FAILED, CANCELLED))
 SUBSCRIBER_BUFFER: int = 256
@@ -31,27 +31,27 @@ class Job:
     error: Optional[str] = None
 
     def summary(self, position: Optional[int] = None) -> Dict:
-        plates: List[Dict] = (self.result or {}).get('plates', [])
-        timing: Dict = (self.result or {}).get('timing_ms', {})
+        plates: List[Dict] = (self.result or {}).get("plates", [])
+        timing: Dict = (self.result or {}).get("timing_ms", {})
         return {
-            'id': self.id,
-            'filename': self.filename,
-            'size': self.size,
-            'status': self.status,
-            'created': self.created,
-            'started': self.started,
-            'finished': self.finished,
-            'position': position,
-            'error': self.error,
-            'plates': len(plates),
-            'total_ms': timing.get('total'),
-            'texts': [
+            "id": self.id,
+            "filename": self.filename,
+            "size": self.size,
+            "status": self.status,
+            "created": self.created,
+            "started": self.started,
+            "finished": self.finished,
+            "position": position,
+            "error": self.error,
+            "plates": len(plates),
+            "total_ms": timing.get("total"),
+            "texts": [
                 {
-                    'text': plate['text'],
-                    'subtype': plate['subtype'],
-                    'confidence': plate['confidence'],
-                    'valid': plate['valid'],
-                    'readable': plate['readable'],
+                    "text": plate["text"],
+                    "subtype": plate["subtype"],
+                    "confidence": plate["confidence"],
+                    "valid": plate["valid"],
+                    "readable": plate["readable"],
                 }
                 for plate in plates
             ],
@@ -59,7 +59,9 @@ class Job:
 
 
 class JobQueue:
-    def __init__(self, pipeline: PlatePipeline, history_limit: int, queue_limit: int) -> None:
+    def __init__(
+        self, pipeline: PlatePipeline, history_limit: int, queue_limit: int
+    ) -> None:
         self._pipeline: PlatePipeline = pipeline
         self._history_limit: int = history_limit
         self._queue_limit: int = queue_limit
@@ -69,7 +71,8 @@ class JobQueue:
         self._channel: asyncio.Queue[str] = asyncio.Queue()
         self._subscribers: Set[asyncio.Queue] = set()
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix='plate-worker',
+            max_workers=1,
+            thread_name_prefix="plate-worker",
         )
         self._worker: Optional[asyncio.Task] = None
         self._processed: int = 0
@@ -78,7 +81,9 @@ class JobQueue:
 
     def start(self) -> None:
         if self._worker is None:
-            self._worker = asyncio.create_task(self._loop(), name='plate-queue')
+            self._worker = asyncio.create_task(
+                self._loop(), name="plate-queue"
+            )
 
     async def stop(self) -> None:
         if self._worker is not None:
@@ -116,10 +121,12 @@ class JobQueue:
             return None
 
     def _emit(self, job: Job) -> None:
-        self._publish({'type': 'job', 'job': job.summary(self._position(job.id))})
+        self._publish(
+            {"type": "job", "job": job.summary(self._position(job.id))}
+        )
 
     def _emit_stats(self) -> None:
-        self._publish({'type': 'stats', 'stats': self.stats()})
+        self._publish({"type": "stats", "stats": self.stats()})
 
     def _evict(self) -> None:
         while len(self._jobs) > self._history_limit:
@@ -132,8 +139,10 @@ class JobQueue:
 
     def submit(self, filename: str, payload: bytes) -> Job:
         if len(self._pending) >= self._queue_limit:
-            raise OverflowError(f'queue is full ({self._queue_limit} jobs)')
-        job: Job = Job(id=uuid.uuid4().hex[:12], filename=filename, size=len(payload))
+            raise OverflowError(f"queue is full ({self._queue_limit} jobs)")
+        job: Job = Job(
+            id=uuid.uuid4().hex[:12], filename=filename, size=len(payload)
+        )
         self._jobs[job.id] = job
         self._payloads[job.id] = payload
         self._pending.append(job.id)
@@ -160,11 +169,13 @@ class JobQueue:
 
     def clear(self) -> int:
         removed: int = 0
-        for job_id in [k for k, v in self._jobs.items() if v.status in TERMINAL]:
+        for job_id in [
+            k for k, v in self._jobs.items() if v.status in TERMINAL
+        ]:
             del self._jobs[job_id]
             removed += 1
         if removed:
-            self._publish({'type': 'cleared'})
+            self._publish({"type": "cleared"})
             self._emit_stats()
         return removed
 
@@ -180,13 +191,13 @@ class JobQueue:
 
     def stats(self) -> Dict:
         return {
-            'queued': len(self._pending),
-            'running': 1 if self._busy else 0,
-            'processed': self._processed,
-            'failed': self._failed,
-            'history': len(self._jobs),
-            'active': self._busy,
-            'subscribers': len(self._subscribers),
+            "queued": len(self._pending),
+            "running": 1 if self._busy else 0,
+            "processed": self._processed,
+            "failed": self._failed,
+            "history": len(self._jobs),
+            "active": self._busy,
+            "subscribers": len(self._subscribers),
         }
 
     async def _loop(self) -> None:
@@ -209,7 +220,9 @@ class JobQueue:
             self._emit_stats()
 
             try:
-                job.result = await loop.run_in_executor(self._executor, self._pipeline, payload)
+                job.result = await loop.run_in_executor(
+                    self._executor, self._pipeline, payload
+                )
                 job.status = DONE
                 self._processed += 1
             except asyncio.CancelledError:
@@ -220,7 +233,7 @@ class JobQueue:
                 raise
             except Exception as error:
                 job.status = FAILED
-                job.error = f'{type(error).__name__}: {error}'
+                job.error = f"{type(error).__name__}: {error}"
                 self._failed += 1
             job.finished = time.time()
             self._busy = None

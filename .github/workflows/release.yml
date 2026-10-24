@@ -1,0 +1,61 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements-dev.txt -r docker/api/requirements.txt
+      - run: make check
+        env:
+          DB_PATH: /tmp/rover-release-test.db
+          PYTHONDONTWRITEBYTECODE: '1'
+      - run: make docker-config
+      - name: Check tag and prepare source artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
+          git archive --format=tar.gz --prefix=rover-anpr/ --output=rover-anpr-source.tar.gz HEAD -- \
+            README.md VERSION Makefile .env.example .gitignore .dockerignore .gitattributes \
+            pyproject.toml requirements.txt requirements-dev.txt .githooks .github \
+            camera.py video_stream.py video_settings.py plate_validator.py event_sender.py \
+            api.py database.py live_preview.py anpr_diagnostics.py check_rtsp.py \
+            evaluate_videos.py full_stand ocr_model/nn/model.py ocr_model/nn/inference.py \
+            ocr_model/utils/alphabet.py ocr_model/utils/geometry.py static tests \
+            compose.yaml compose.cuda.yaml docker docs/architecture.puml
+          sha256sum rover-anpr-source.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-source
+          path: |
+            rover-anpr-source.tar.gz
+            SHA256SUMS
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-source
+      - name: Publish verified source release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          printf '%s\n' \
+            'Known limitations:' \
+            '- The RTSP camera is currently unavailable; a live camera check could not be completed for this release.' \
+            '- ONVIF Profile G has not been verified and is not implemented.' > release-notes.md
+          gh release create "$TAG" rover-anpr-source.tar.gz SHA256SUMS \
+            --verify-tag --title "$TAG" --notes-file release-notes.md --generate-notes

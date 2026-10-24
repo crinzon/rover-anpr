@@ -1,58 +1,27 @@
-PYTHON := .venv/bin/python
-PIP := .venv/bin/pip
-COMPOSE := docker compose
-COMPOSE_FILES ?= -f compose.yaml
+# The four primary commands manage only the rover-anpr Compose project.
+COMPOSE ?= docker compose
+COMPOSE_FILES ?= -f compose.yaml -f compose.cuda.yaml
+STACK = $(COMPOSE) --project-name rover-anpr $(COMPOSE_FILES)
+PYTHON ?= python3
 
-.PHONY: install run stop purge
+.PHONY: install run stop purge check test lint format-check check-rtsp docker-config
 
 install:
-	python3 -m venv .venv
-	$(PIP) install -r requirements.txt
+	@test -f .env || (umask 077; cp .env.example .env)
+	@mkdir -p checkpoints
+	$(STACK) build
 
 run:
-	@mkdir -p .run
-	@if [ -f .run/api.pid ] && kill -0 $$(cat .run/api.pid) 2>/dev/null; then \
-		echo "API уже запущен"; \
-	else \
-		$(PYTHON) -m uvicorn api:app --host 127.0.0.1 --port 8000 > .run/api.log 2>&1 & echo $$! > .run/api.pid; \
-		echo "API запускается"; \
-	fi
-	@if [ -f .run/camera.pid ] && kill -0 $$(cat .run/camera.pid) 2>/dev/null; then \
-		echo "Камера уже запущена"; \
-	else \
-		$(PYTHON) camera.py > .run/camera.log 2>&1 & echo $$! > .run/camera.pid; \
-		echo "Камера запускается"; \
-	fi
+	@test -f .env || (echo "Create .env from .env.example first"; exit 1)
+	@test -f checkpoints/plate_detector.pt -a -f checkpoints/plate_recognizer.pt || (echo "Place both checkpoints in checkpoints/"; exit 1)
+	$(STACK) up -d --no-build
 
 stop:
-	@for name in camera api; do \
-		if [ -f .run/$$name.pid ]; then \
-			kill $$(cat .run/$$name.pid) 2>/dev/null || true; \
-			rm -f .run/$$name.pid; \
-		fi; \
-	done
-	@echo "Сервисы остановлены"
+	$(STACK) stop
 
-purge: stop
-	@rm -rf .run
-	@echo "Временные файлы удалены"
-
-.PHONY: docker-install docker-run docker-stop docker-purge
-
-docker-install:
-	$(COMPOSE) $(COMPOSE_FILES) build
-
-docker-run:
-	$(COMPOSE) $(COMPOSE_FILES) up -d
-
-docker-stop:
-	$(COMPOSE) $(COMPOSE_FILES) down
-
-docker-purge:
-	$(COMPOSE) $(COMPOSE_FILES) down --rmi local --remove-orphans
-
-# Install quality tools separately: .venv/bin/pip install -r requirements-dev.txt
-.PHONY: lint format-check test check
+# Never use --volumes, global prune, or delete files here. Persistent data stays.
+purge:
+	$(STACK) down --rmi local --remove-orphans
 
 lint:
 	$(PYTHON) -m ruff check .
@@ -65,7 +34,17 @@ test:
 
 check: lint format-check test
 
-# Quiet validation using public values; never load private .env.
-.PHONY: docker-config
+# One capture probe, no neural models. Stop Camera first to avoid a second RTSP session.
+RTSP_DURATION ?= 15
+check-rtsp:
+	$(STACK) run --rm --no-deps camera python check_rtsp.py --duration $(RTSP_DURATION)
+
 docker-config:
-	ANPR_ENV_FILE=.env.example $(COMPOSE) --env-file .env.example $(COMPOSE_FILES) config --quiet
+	ANPR_ENV_FILE=.env.example $(STACK) --env-file .env.example config --quiet
+
+# Compatibility with existing usage; primary commands above are preferred.
+.PHONY: docker-install docker-run docker-stop docker-purge
+docker-install: install
+docker-run: run
+docker-stop: stop
+docker-purge: purge

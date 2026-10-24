@@ -6,6 +6,24 @@ import unittest
 from video_stream import VideoStream, safe_source
 
 
+class ClockCapture:
+    def __init__(self, source):
+        self.next_frame = time.monotonic()
+        self.number = 0
+
+    def isOpened(self):
+        return True
+
+    def read(self):
+        self.next_frame += 1 / 19
+        time.sleep(max(0, self.next_frame - time.monotonic()))
+        self.number += 1
+        return True, (self.number, self.next_frame)
+
+    def release(self):
+        pass
+
+
 class FakeCapture:
     def __init__(self, source):
         self.source = source
@@ -46,6 +64,20 @@ class VideoStreamTest(unittest.TestCase):
         self.assertIsNone(stream.process)
         self.assertEqual(stream.read(), (True, b"fresh"))
         self.assertEqual(stream.delay, stream.initial)
+
+    def test_slow_consumer_gets_latest_not_queued_frames(self):
+        stream = VideoStream(
+            0, factory=ClockCapture, timeout=3, logger=lambda _: None
+        )
+        self.addCleanup(stream.release)
+        ok, first = stream.read()
+        self.assertTrue(ok)
+        time.sleep(0.4)
+        ok, latest = stream.read()
+        self.assertTrue(ok)
+        self.assertGreater(latest[0] - first[0], 3)
+        self.assertLess(time.monotonic() - latest[1], 0.2)
+        self.assertGreater(stream.dropped_frames, 0)
 
     def test_backoff_is_capped(self):
         stream = self.stream("closed")

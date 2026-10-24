@@ -1,5 +1,0 @@
-train: plates/train
-val: plates/val
-
-names:
-  0: licence_plate

@@ -1,0 +1,21 @@
+name: Checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements-dev.txt -r docker/api/requirements.txt
+      - run: make check
+        env:
+          DB_PATH: /tmp/rover-ci.db
+          PYTHONDONTWRITEBYTECODE: '1'
+      - name: Check Compose (public values only)
+        run: make docker-config

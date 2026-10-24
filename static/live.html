@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rover ANPR · Камера</title>
+<style>
+body{margin:0;background:#101820;color:#edf3f7;font:16px system-ui}main{max-width:1920px;margin:auto;padding:24px}header{display:flex;justify-content:space-between;align-items:center}h1{font-size:24px}#state{color:#ffd166}.video{position:relative;background:#05090c;min-height:240px;border-radius:12px;overflow:hidden}canvas{display:block;width:100%;height:auto}#lost{position:absolute;inset:0;display:grid;place-items:center;background:#101820ed;font-size:24px}#stats,#timing{padding:12px 0;color:#adc6d5}li{padding:8px}footer{color:#adc6d5;font-size:14px}
+</style>
+<main><header><h1>Rover ANPR</h1><span id="state">Подключение…</span></header>
+<div class="video"><canvas width="1920" height="1080" aria-label="Живое видео камеры"></canvas><div id="lost">Нет сигнала</div></div>
+<div id="anpr-health" role="status"></div><div id="stats">Ожидание кадров</div><div id="timing"></div><ul id="plates"></ul>
+<section id="diagnostics" hidden>
+<h2>Диагностика ANPR · стоп-кадры инференса</h2>
+<p id="debug-state">Ожидание…</p>
+<button id="debug-pause">Пауза диагностики</button>
+<button id="debug-download">Скачать полный JSON</button>
+<label><input type="checkbox" id="debug-all"> Все proposals до confidence/NMS</label>
+<canvas id="debug-frame" style="max-width:1280px"></canvas>
+<p>Клик по строке YOLO — исходный кроп выбранного proposal:</p><canvas id="debug-crop" style="width:auto;max-width:100%;max-height:240px"></canvas>
+<h3>Результаты OCR и подтверждения</h3><div id="debug-plates"></div>
+<h3>Все выходные proposals YOLO</h3><p>OCR запускается только после штатных порогов/NMS/проверки размера. Лимиты и причины указаны ниже; сырые proposals не являются подтверждёнными номерами.</p>
+<button id="debug-prev">Назад</button><span id="debug-page"></span><button id="debug-next">Далее</button>
+<div style="overflow:auto"><table><thead><tr><th>ID</th><th>Box на исходном кадре</th><th>YOLO confidence</th><th>Результат отбора</th></tr></thead><tbody id="debug-rows"></tbody></table></div>
+</section>
+<footer>Зелёная рамка — номер подтверждён · Жёлтая — ожидает подтверждения.<br>
+Рамки последних результатов ANPR скрываются при устаревании. Возраст считается от декодирования RTSP, без задержки самой камеры.</footer></main>
+<script>
+const state=document.getElementById('state'),lost=document.getElementById('lost'),stats=document.getElementById('stats'),timing=document.getElementById('timing'),plates=document.getElementById('plates');
+const canvas=document.querySelector('canvas'),context=canvas.getContext('2d');
+let after=0,targetFPS=20,lastDisplay=0,displayTimes=[];
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function preview(){
+  while(true){
+    const start=performance.now(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),2000);
+    try{
+      const response=await fetch('/live/frame?after='+after,{cache:'no-store',signal:controller.signal});
+      if(response.status===503)throw Error('no signal');
+      if(response.status===200){
+        const blob=await response.blob(),received=performance.now();
+        const image=await createImageBitmap(blob),decoded=performance.now();
+        try{
+          await new Promise(requestAnimationFrame);
+          if(performance.now()-received+Number(response.headers.get("X-frame-age-ms"))>2000)continue;
+          if(canvas.width!==image.width||canvas.height!==image.height){canvas.width=image.width;canvas.height=image.height}
+          context.drawImage(image,0,0);
+        }finally{image.close()}
+        const shown=performance.now(),rtt=received-start,decode=decoded-received;
+        const metric=key=>Number(response.headers.get('X-'+key.replaceAll('_','-'))||0);
+        after=metric('timestamp');lastDisplay=shown;
+        displayTimes.push(shown);if(displayTimes.length>60)displayTimes.shift();
+        const fps=displayTimes.length>1?(displayTimes.length-1)*1000/(shown-displayTimes[0]):0;
+        const ageMin=metric('frame_age_ms')+(shown-received),ageMax=ageMin+rtt;
+        lost.style.display='none';state.textContent='Камера подключена';
+        stats.textContent=`Браузер ${fps.toFixed(1)} FPS · Превью ${metric('preview_fps').toFixed(1)} FPS · ANPR ${metric('fps').toFixed(1)} FPS / ${metric('processing_ms').toFixed(1)} мс · ${canvas.width}×${canvas.height}`;
+        timing.textContent=`Возраст кадра ${ageMin.toFixed(0)}–${ageMax.toFixed(0)} мс · ANPR целиком ${metric('inference_total_ms').toFixed(1)} мс · Подготовка ${metric('preview_render_ms').toFixed(1)} мс · JPEG ${metric('jpeg_ms').toFixed(1)} мс · IPC ${metric('capture_ipc_ms').toFixed(1)} мс · Volume ${metric('volume_write_ms').toFixed(1)} мс · До API ${metric('transfer_to_api_ms').toFixed(1)} мс · HTTP ${rtt.toFixed(1)} мс · Декодирование браузером ${decode.toFixed(1)} мс`;
+      }else if(response.status!==204)throw Error('API');
+    }catch{
+      if(performance.now()-lastDisplay>2000){lost.style.display='grid';state.textContent='Нет сигнала';displayTimes=[]}
+    }finally{clearTimeout(timer)}
+    await sleep(Math.max(5,1000/targetFPS-(performance.now()-start)));
+  }
+}
+async function status(){
+  try{
+    const r=await fetch('/live/status',{cache:'no-store',signal:AbortSignal.timeout(2000)});
+    if(!r.ok)throw Error();const s=await r.json();
+    const health=document.getElementById("anpr-health");
+    health.textContent=`ANPR: ${s.inference_state||"неизвестно"} · возраст результата ${((s.inference_age_ms||0)/1000).toFixed(1)} с${s.inference_error?" · "+s.inference_error:""}`;
+    health.style.color=s.inference_state==="running"?"#65df91":"#ffd166";
+    targetFPS=Math.min(30,Math.max(1,s.target_fps||20));
+    plates.replaceChildren();
+    if(s.available){for(const p of s.plates){const li=document.createElement('li');li.textContent=`${p.text||'Не прочитан'} · ${(p.confidence*100).toFixed(1)}% · ${p.confirmed?'Подтверждён':'Ожидает подтверждения'}`;plates.append(li)}}
+    else if(performance.now()-lastDisplay>2000){lost.style.display='grid';state.textContent='Нет сигнала';displayTimes=[]}
+  }catch{if(performance.now()-lastDisplay>2000){state.textContent='API недоступен';lost.style.display='grid'}}
+  setTimeout(status,1000);
+}
+const debugEnabled=new URLSearchParams(location.search).get('debug')==='1';
+if(debugEnabled){
+  document.getElementById('diagnostics').hidden=false;
+  let report=null,sampleImage=null,page=0,paused=false,selected=null;
+  const debugState=document.getElementById('debug-state'),frame=document.getElementById('debug-frame'),crop=document.getElementById('debug-crop');
+  const reasons={detector_confidence:'Ниже порога YOLO',nms_or_max_detections:'NMS или лимит детекций',box_too_small:'Слишком маленький box',invalid_prediction:'Некорректный выход модели',unreadable_subtype:'Нечитаемый subtype',ocr_confidence:'Ниже порога OCR',rover_format:'Не соответствует формату ровера',insufficient_confirmations:'Недостаточно подтверждений',confirmed_number_mismatch:'Ожидание подтверждения смены номера',confirmed_label_missing_from_history:'Подтверждённый текст отсутствует в истории'};
+  const reasonText=value=>reasons[value]||value;
+  function drawSample(){
+    if(!sampleImage||!report)return;
+    frame.width=sampleImage.naturalWidth;frame.height=sampleImage.naturalHeight;
+    const ctx=frame.getContext('2d');ctx.drawImage(sampleImage,0,0);ctx.lineWidth=3;
+    const all=document.getElementById('debug-all').checked;
+    for(const p of report.raw_proposals||[]){if(!p.box||(!all&&!p.selected&&p.id!==selected))continue;const [x1,y1,x2,y2]=p.box;ctx.strokeStyle=p.id===selected?'#ff4dff':p.reason?'#ffb547':'#44ff88';ctx.strokeRect(x1,y1,x2-x1,y2-y1)}
+    const chosen=(report.raw_proposals||[]).find(p=>p.id===selected);
+    if(chosen&&chosen.box){const [x1,y1,x2,y2]=chosen.box;const w=Math.max(1,Math.ceil(x2-x1)),h=Math.max(1,Math.ceil(y2-y1));crop.width=w;crop.height=h;crop.getContext('2d').drawImage(sampleImage,x1,y1,w,h,0,0,w,h)}
+  }
+  function renderRows(){
+    const rows=[...(report?.raw_proposals||[])].sort((a,b)=>(b.confidence||0)-(a.confidence||0));
+    const pages=Math.max(1,Math.ceil(rows.length/50));page=Math.min(page,pages-1);
+    document.getElementById('debug-page').textContent=` ${page+1}/${pages} · proposals: ${rows.length} `;
+    const body=document.getElementById('debug-rows');body.replaceChildren();
+    for(const p of rows.slice(page*50,(page+1)*50)){const tr=document.createElement('tr');for(const text of [p.id,p.box?.map(v=>v.toFixed(1)).join(', ')||'invalid',p.confidence?.toPrecision(4)??'invalid',p.reason?reasonText(p.reason):'Передан OCR']){const td=document.createElement('td');td.textContent=String(text);td.style.padding='6px';tr.append(td)}tr.style.cursor='pointer';tr.onclick=()=>{selected=p.id;drawSample()};body.append(tr)}
+  }
+  function renderOCR(){
+    const container=document.getElementById('debug-plates');container.replaceChildren();
+    for(const p of report.plates||[]){
+      const card=document.createElement('article');card.style.padding='12px';card.style.borderBottom='1px solid #385064';
+      const line=document.createElement('p');line.textContent=`ID ${p.raw_id} · YOLO ${Number(p.detection_confidence).toFixed(3)} · raw OCR «${p.raw_text}» → «${p.text}» · OCR ${p.ocr_confidence.toFixed(3)} · readable ${p.readable} · subtype ${p.subtype} · формат модели ${p.model_format_valid} · формат ровера ${p.rover_format_valid} · ${p.status} · голоса ${p.confirmations}/${p.required||report.thresholds.min_confirmations} · ${p.reasons.map(reasonText).join('; ')||'Принят'} · исходный размер ${p.original_size.map(x=>x.toFixed(1)).join('×')} px · на входе YOLO ≈ ${p.detector_size.map(x=>x.toFixed(1)).join('×')} px`;
+      card.append(line);
+      if(p.patch_png?.startsWith('data:image/png;base64,')){const img=document.createElement('img');img.src=p.patch_png;img.alt='Точный нормализованный вход OCR';img.style.maxWidth='100%';card.append(img)}
+      container.append(card);
+    }
+    if(!report.plates?.length)container.textContent='Ни один box не дошёл до OCR; смотрите причины отбора YOLO.';
+  }
+  document.getElementById('debug-all').onchange=drawSample;
+  document.getElementById('debug-prev').onclick=()=>{page=Math.max(0,page-1);renderRows()};
+  document.getElementById('debug-next').onclick=()=>{page++;renderRows()};
+  document.getElementById('debug-pause').onclick=event=>{paused=!paused;event.target.textContent=paused?'Продолжить диагностику':'Пауза диагностики';if(paused)debugState.textContent='Пауза: показан диагностический стоп-кадр. Живое видео продолжается.'};
+  document.getElementById('debug-download').onclick=()=>{if(!report)return;const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='anpr-diagnostics.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+  async function debugRefresh(){
+    try{
+      if(paused)return;
+      const response=await fetch('/live/diagnostics',{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error();
+      const data=await response.json();
+      if(data.state!=='ok'){debugState.textContent=data.enabled?`Диагностика: ${data.state} ${data.error_code||''}`:'Включите ANPR_DIAGNOSTICS=true и перезапустите Camera';document.getElementById('debug-plates').replaceChildren();document.getElementById('debug-rows').replaceChildren();report=null;sampleImage=null;frame.getContext('2d').clearRect(0,0,frame.width,frame.height);crop.getContext('2d').clearRect(0,0,crop.width,crop.height);return}
+      report=data;
+      debugState.textContent=`Кадр инференса ${data.frame_id} · возраст ${(data.age_ms+(data.completed_at-data.captured_at)*1000).toFixed(0)} мс · YOLO ${data.timing_ms.detect.toFixed(1)} мс · OCR ${data.timing_ms.recognize.toFixed(1)} мс · выход ${data.model_output_shape} · вход ${data.detector_input_shape} · этапы ${JSON.stringify(data.gate_counts)} · пороги ${JSON.stringify(data.thresholds)}`;
+      renderRows();renderOCR();
+      if(data.frame_jpeg?.startsWith('data:image/jpeg;base64,')){const img=new Image();img.src=data.frame_jpeg;await img.decode();sampleImage=img;drawSample()}
+    }catch{debugState.textContent='Диагностика недоступна'}finally{setTimeout(debugRefresh,1000)}
+  }
+  debugRefresh();
+}
+preview();status();
+</script></html>

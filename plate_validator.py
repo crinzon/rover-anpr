@@ -12,3 +12,11 @@ def normalize_plate(number):
 def is_valid_plate(number):
     number = normalize_plate(number)
     return bool(PLATE_PATTERN.fullmatch(number))
+
+
+def confirmed_confidence(history, number):
+    """No confidence when the confirmed label has left the rolling history."""
+    matching = [
+        item["confidence"] for item in history if item["plate"] == number
+    ]
+    return sum(matching) / len(matching) if matching else None

@@ -1,16 +1,21 @@
-# This stage checks rover entrypoints and isolated tests only.
-# full_stand and ocr_model are runtime dependencies, not claimed lint-clean.
 [tool.ruff]
 target-version = "py311"
 line-length = 79
-include = ["camera.py", "video_stream.py", "event_sender.py", "api.py", "database.py", "plate_validator.py", "tests/test_*.py"]
-extend-exclude = [".venv", "backups", "captures", "checkpoints", "outputs", "generated", "real_plates*", "generator", "detector", "ocr_model", "full_stand", "test_clahe.py"]
+extend-exclude = ["generator", "detector", "checkpoints", "evaluation_results", "test_videos", "outputs", "captures", "data", "backups", ".tools", ".work", "ocr_model/run_training.py", "ocr_model/tests", "ocr_model/utils/dataset.py", "ocr_model/utils/ema.py", "ocr_model/utils/optimizer.py", "ocr_model/utils/samples.py", "ocr_model/utils/train.py"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N"]
 
-# OpenCV-compatible fake interface; matches VideoCapture.isOpened().
 [tool.ruff.lint.per-file-ignores]
+# These modules set import paths for checkpoint-compatible nn/utils namespaces.
+"full_stand/app.py" = ["E402"]
+"full_stand/pipeline.py" = ["E402"]
+"ocr_model/nn/inference.py" = ["E402"]
+# Standard PyTorch functional alias; preserve checkpoint/runtime naming.
+"ocr_model/nn/model.py" = ["N812"]
+"tests/check_native_anpr.py" = ["E402"]
+"tests/check_replay.py" = ["E402", "N802"]
+# OpenCV-compatible fake interfaces use its method names.
 "tests/test_video_stream.py" = ["N802"]
 
 [tool.pytest.ini_options]

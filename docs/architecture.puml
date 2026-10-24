@@ -1,0 +1,54 @@
+@startuml
+!pragma layout smetana
+!theme plain
+left to right direction
+skinparam shadowing false
+title Rover ANPR — data flow (implemented system)
+
+actor "External API consumer / browser" as consumer
+rectangle "Hikvision\nlive RTSP" as camera
+rectangle "Local video file\nsequential replay with video PTS" as file
+rectangle "Camera process" {
+  rectangle "OpenCV capture\nlatest-frame-only for live" as capture
+  rectangle "YOLO26n (CUDA)\nboxes + detection confidence" as yolo
+  rectangle "OCR (CUDA)\ntext, subtype, confidence" as ocr
+  rectangle "RF plate format +\nOCR confidence filter" as validate
+  rectangle "Tracking + weighted voting\n3 of 5 observations; change 7 of 10" as confirm
+  rectangle "Relative position + crop quality\ncenter offset + LEFT/CENTER/RIGHT" as position
+  rectangle "EventSender\nbounded queue + retries" as sender
+  rectangle "Preview / optional diagnostics" as preview
+}
+rectangle "FastAPI\n/plates /history /health\n/live /live/frame /live/status\n/live/stream /live/diagnostics\n/captures" as api
+database "SQLite" as db
+folder "Shared captures volume\nJPEG snapshots + atomic preview files" as storage
+
+camera --> capture : decoded full-size frames
+file --> capture : every frame, no live skipping
+capture --> yolo : original-resolution frame\nexisting JPEG input adapter
+yolo --> ocr : cropped detected plates
+ocr --> validate : intermediate OCR hypotheses
+validate --> position : readable + confidence >= 0.85\ncivilian RF format, box and source size
+position --> confirm : candidate, center, position, confidence, quality
+confirm --> sender : session_id, event_id, track_id\nplate, confidence, quality, position\ndistance_m=null, optional image_path
+sender --> api : POST /plates (confirmed events)
+confirm --> storage : best frame snapshots
+capture --> preview : fresh frames independent of inference
+ocr --> preview : current hypotheses + boxes\nnot only confirmed labels
+confirm --> preview : confirmation state
+preview --> storage : latest bounded JPEG / diagnostics
+storage --> api : shared-file read + snapshot serving
+api --> db : plate, confidence, detected_at, image_path\ntrack/quality bookkeeping + event deduplication
+api --> consumer : current confirmed results / history\npreview, diagnostics, snapshots
+consumer --> api : HTTP requests
+
+note bottom of db
+Coordinates and boxes are NOT persisted in SQLite.
+position exists in current /plates results;
+boxes and OCR hypotheses exist in preview/diagnostics.
+History timestamp is API receipt time, not video PTS.
+end note
+note bottom of capture
+No ONVIF archive retrieval, ROS2 or QR docking implemented.
+Live drops old frames; file replay waits for each processed frame.
+end note
+@enduml

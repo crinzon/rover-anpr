@@ -1,10 +1,7 @@
-torch
-torchvision
-ultralytics==8.4.150
-opencv-python==5.0.0.93
-numpy
-Pillow
-fastapi
-uvicorn
-python-multipart
-requests
+# Local development; the primary deployment uses the Dockerfiles.
+torch==2.9.1
+torchvision==0.24.1
+-r docker/api/requirements.txt
+-r docker/camera/requirements.txt
+# Required only by the retained photo-upload stand.
+python-multipart==0.0.32

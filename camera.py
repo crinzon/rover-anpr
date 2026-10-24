@@ -1,4 +1,5 @@
 import csv
+import signal
 import threading
 import time
 import uuid
@@ -8,33 +9,22 @@ from pathlib import Path
 
 import cv2
 
+from anpr_diagnostics import Diagnostics, describe_plate, set_confirmation
 from event_sender import EventSender
 from full_stand.config import StandConfig
 from full_stand.pipeline import PlatePipeline
-from plate_validator import is_valid_plate, normalize_plate
+from live_preview import PreviewPublisher
+from plate_validator import (
+    confirmed_confidence,
+    is_valid_plate,
+    normalize_plate,
+)
+from video_settings import load_env, stream_options
 from video_stream import VideoStream
 
 
-def load_env():
-    settings = {}
-    env_path = Path(__file__).resolve().parent / ".env"
-
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            settings[key.strip()] = value.strip()
-
-    import os
-
-    settings.update(os.environ)
-    return settings
-
-
-def main():
-    settings = load_env()
+def main(settings=None, replay=None, pipeline_override=None):
+    settings = load_env() if settings is None else settings
     video_source = settings.get("VIDEO_SOURCE", "0")
     api_url = settings.get("API_URL", "http://127.0.0.1:8000/plates")
     device = settings.get("DEVICE", "mps")
@@ -42,34 +32,55 @@ def main():
 
     config = StandConfig(device=device, confidence=0.5)
     config.validate()
-    pipeline = PlatePipeline(config)
-    session_id = uuid.uuid4().hex
-    captures_dir = Path(__file__).resolve().parent / "captures"
-    captures_dir.mkdir(exist_ok=True)
+    pipeline = (
+        PlatePipeline(config)
+        if pipeline_override is None
+        else pipeline_override
+    )
+    session_id = replay.session_id if replay is not None else uuid.uuid4().hex
+    captures_dir = (
+        replay.capture_dir
+        if replay is not None
+        else Path(__file__).resolve().parent / "captures"
+    )
+    captures_dir.mkdir(parents=True, exist_ok=True)
     history_size = 10
     min_confirmations = 3
+    ocr_threshold = 0.85
     change_confirmations = 7
     track_timeout = 1.0
     reid_timeout = 30.0
     match_distance = 0.12
     quality_improvement = 0.08
     visibility_timeout = 1.0  # секунд без обнаружения до события ИСЧЕЗ
-    visibility_log = Path(__file__).resolve().parent / "visibility_log.csv"
+    visibility_log = (
+        replay.directory / "visibility.csv"
+        if replay is not None
+        else Path(__file__).resolve().parent / "visibility_log.csv"
+    )
     source = int(video_source) if video_source.isdigit() else video_source
-    camera = VideoStream(
-        source,
-        initial=float(settings.get("VIDEO_RETRY_INITIAL", "0.5")),
-        maximum=float(settings.get("VIDEO_RETRY_MAX", "10")),
-        timeout=float(settings.get("VIDEO_OPERATION_TIMEOUT", "5")),
+    camera = (
+        replay
+        if replay is not None
+        else VideoStream(source, **stream_options(settings))
     )
     lock = threading.Lock()
     frame_ready = threading.Condition(lock)
     latest_frame = None
     latest_frame_id = 0
     latest_frame_timestamp = 0.0
+    latest_media_timestamp = 0.0
     results = []
     result_time = 0.0
     running = True
+
+    def request_stop(signum, frame):
+        nonlocal running
+        running = False
+        camera.stop.set()
+
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, request_stop)
     tracks = {}
     next_track_id = 1
     visibility_file = open(visibility_log, "a", newline="", encoding="utf-8")
@@ -118,9 +129,14 @@ def main():
         timeout=float(settings.get("DELIVERY_TIMEOUT", "2")),
     )
 
+    if replay is not None:
+        replay.attach_sender(sender)
+
     def send_to_api(plates):
         for plate in plates:
-            sender.submit(session_id, plate)
+            queued = sender.submit(session_id, plate)
+            if replay is not None:
+                replay.record_submission(plate, queued)
 
     def plate_distance(first, second):
         if len(first) != len(second):
@@ -174,8 +190,8 @@ def main():
         if x2 - x1 < 8 or y2 - y1 < 6:
             return 0.0, 0.0
         crop = frame[y1:y2, x1:x2]
-        gray = cv2.cvtColor(crop, cv2.color_bgr2gray)
-        sharpness = float(cv2.Laplacian(gray, cv2.cv_64f).var())
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
         size_score = min((x2 - x1) / 160.0, 1.0) * min((y2 - y1) / 35.0, 1.0)
         sharpness_score = min(sharpness / 250.0, 1.0)
         quality = confidence * (0.45 * size_score + 0.55 * sharpness_score)
@@ -195,9 +211,36 @@ def main():
         number = max(scores, key=lambda value: (scores[value], counts[value]))
         return number, counts[number]
 
+    preview = (
+        replay.preview if replay is not None else PreviewPublisher(settings)
+    )
+    thresholds = dict(
+        detector_confidence=config.confidence,
+        detector_iou=config.iou,
+        detector_imgsz=config.imgsz,
+        min_box_side=config.min_box_side,
+        max_detections=config.max_detections,
+        ocr_confidence=ocr_threshold,
+        min_confirmations=min_confirmations,
+        recent_window=5,
+        history_size=history_size,
+        change_confirmations=change_confirmations,
+        track_timeout=track_timeout,
+        reid_timeout=reid_timeout,
+        rover_format="LDDDLLDD or LDDDLLDDD; letters ABEKMHOPCTYX",
+    )
+    diagnostics = (
+        replay.diagnostics
+        if replay is not None
+        else Diagnostics(settings, thresholds)
+    )
+    if replay is not None:
+        replay.thresholds = thresholds
+
     def recognize():
         nonlocal latest_frame, results, result_time, next_track_id
         last_processed_frame_id = 0
+        completed = deque(maxlen=30)
         while running:
             with frame_ready:
                 frame_ready.wait_for(
@@ -206,27 +249,74 @@ def main():
                 )
                 if not running:
                     break
-                frame = latest_frame.copy()
+                frame = latest_frame
                 frame_id = latest_frame_id
                 frame_timestamp = latest_frame_timestamp
+                media_timestamp = latest_media_timestamp
                 # Claim before encoding/inference, including failed attempts.
                 last_processed_frame_id = frame_id
+            inference_queue_ms = (time.monotonic() - frame_timestamp) * 1000
+            input_started = time.perf_counter()
             success, buffer = cv2.imencode(".jpg", frame)
+            input_jpeg_ms = (time.perf_counter() - input_started) * 1000
             if not success:
+                if replay is not None:
+                    replay.record_error(
+                        frame_id, media_timestamp, "input_encode_failed"
+                    )
                 continue
+            sample_debug = replay is not None or diagnostics.due()
+            payload = buffer.tobytes()
             try:
-                output = pipeline(buffer.tobytes())
+                output = (
+                    pipeline(payload, diagnostics=True)
+                    if sample_debug and replay is None
+                    else pipeline(payload)
+                )
+                inference_total_ms = (
+                    time.perf_counter() - input_started
+                ) * 1000
                 plates = output["plates"]
                 print(f"Обработка: {output['timing_ms']['total']:.0f} мс")
-            except Exception as error:
-                print("Recognition error:", error)
+            except Exception:
+                preview.set_inference_error("pipeline_failed")
+                diagnostics.error("pipeline_failed")
+                print("Recognition error: pipeline_failed")
+                if replay is not None:
+                    replay.record_error(
+                        frame_id, media_timestamp, "pipeline_failed"
+                    )
                 time.sleep(0.1)
                 continue
             height, width = frame.shape[:2]
-            current_time = time.monotonic()
+            current_time = (
+                media_timestamp if replay is not None else time.monotonic()
+            )
+            live_plates = [
+                dict(
+                    box=p["box"],
+                    text=normalize_plate(p["text"]),
+                    confidence=p["confidence"],
+                    confirmed=False,
+                )
+                for p in plates
+            ]
+            diagnostic_plates = (
+                [
+                    describe_plate(
+                        p, ocr_threshold, width, config.imgsz, height
+                    )
+                    for p in plates
+                ]
+                if sample_debug
+                else []
+            )
             candidates = []
             for plate in plates:
-                if not plate["readable"] or plate["confidence"] < 0.85:
+                if (
+                    not plate["readable"]
+                    or plate["confidence"] < ocr_threshold
+                ):
                     continue
                 number = normalize_plate(plate["text"])
                 if not is_valid_plate(number):
@@ -370,6 +460,19 @@ def main():
                 if track["confirmed_number"] is None:
                     recent = list(track["history"])[-5:]
                     number, count = weighted_choice(recent)
+                    if sample_debug:
+                        item = next(
+                            p
+                            for p in diagnostic_plates
+                            if p["box"] == candidate["box"]
+                        )
+                        set_confirmation(
+                            item,
+                            track_id,
+                            count,
+                            min_confirmations,
+                            track["confirmed_number"],
+                        )
                     if count < min_confirmations:
                         continue
                     track["confirmed_number"] = number
@@ -389,6 +492,24 @@ def main():
                             f"{track_id}: {number}"
                         )
                     count = numbers.count(number)
+                if sample_debug:
+                    item = next(
+                        p
+                        for p in diagnostic_plates
+                        if p["box"] == candidate["box"]
+                    )
+                    set_confirmation(
+                        item,
+                        track_id,
+                        count,
+                        min_confirmations,
+                        number,
+                        history=numbers,
+                        change_required=change_confirmations,
+                    )
+                for item in live_plates:
+                    if item["box"] == candidate["box"]:
+                        item["confirmed"] = candidate["plate"] == number
                 display_plates.append(
                     {
                         "box": candidate["box"],
@@ -396,14 +517,21 @@ def main():
                         "position": candidate["position"]["direction"],
                     }
                 )
-                matching = [
-                    item
-                    for item in track["history"]
-                    if item["plate"] == number
-                ]
-                average_confidence = sum(
-                    item["confidence"] for item in matching
-                ) / len(matching)
+                average_confidence = confirmed_confidence(
+                    track["history"], number
+                )
+                if average_confidence is None:
+                    if sample_debug:
+                        debug_item = next(
+                            p
+                            for p in diagnostic_plates
+                            if p["box"] == candidate["box"]
+                        )
+                        debug_item["status"] = "waiting_confirmation"
+                        debug_item["reasons"] = [
+                            "confirmed_label_missing_from_history"
+                        ]
+                    continue
                 quality = candidate["quality"]
                 confirmed = {
                     "track_id": track_id,
@@ -426,7 +554,12 @@ def main():
                     )
                     filepath = captures_dir / filename
                     if cv2.imwrite(str(filepath), frame):
-                        confirmed["image_path"] = f"/captures/{filename}"
+                        prefix = (
+                            replay.image_prefix
+                            if replay is not None
+                            else "/captures"
+                        )
+                        confirmed["image_path"] = f"{prefix}/{filename}"
                         track["best_quality"] = quality
                         track["saved_number"] = number
                 confirmed_plates.append(confirmed)
@@ -435,29 +568,88 @@ def main():
                     f"({count}/{len(track['history'])}) | "
                     f"Качество: {quality:.1%}"
                 )
+            completed.append(time.monotonic())
+            fps = (
+                (len(completed) - 1) / (completed[-1] - completed[0])
+                if len(completed) > 1
+                else 0.0
+            )
+            preview.update_results(
+                live_plates,
+                fps,
+                output["timing_ms"]["total"],
+                frame_timestamp,
+                input_jpeg_ms,
+                inference_queue_ms,
+                inference_total_ms,
+            )
+            if sample_debug:
+                diagnostics.finish(
+                    output,
+                    diagnostic_plates,
+                    frame_id,
+                    frame_timestamp,
+                    payload,
+                )
             with lock:
                 results = display_plates
                 result_time = time.monotonic()
             if confirmed_plates:
                 send_to_api(confirmed_plates)
+            if replay is not None:
+                replay.record_frame(
+                    frame_id,
+                    media_timestamp,
+                    output,
+                    diagnostic_plates,
+                    confirmed_plates,
+                    inference_total_ms,
+                )
 
-    worker = threading.Thread(target=recognize, daemon=True)
+    def recognize_guarded():
+        try:
+            recognize()
+        except Exception:
+            preview.set_inference_error("worker_failed")
+            diagnostics.error("worker_failed")
+            print("Recognition worker stopped: worker_failed", flush=True)
+            if replay is not None:
+                replay.fail_worker()
+
+    worker = threading.Thread(target=recognize_guarded, daemon=True)
     worker.start()
     try:
-        while True:
+        while running:
             success, frame = camera.read()
             if not success:
+                if replay is not None:
+                    break
                 if show_window and cv2.waitKey(1) & 0xFF == ord("q"):
                     break
                 continue
             height, width = frame.shape[:2]
             with lock:
-                latest_frame = frame.copy()
+                latest_frame = frame
                 latest_frame_id += 1
-                latest_frame_timestamp = time.monotonic()
+                latest_frame_timestamp = camera.last_frame_timestamp
+                latest_media_timestamp = (
+                    replay.media_time if replay is not None else 0.0
+                )
                 frame_ready.notify()
                 plates = list(results)
                 age = time.monotonic() - result_time
+            if replay is not None:
+                replay.wait_frame(latest_frame_id)
+            preview.submit(
+                frame,
+                camera.last_frame_timestamp,
+                camera.capture_fps,
+                camera.capture_read_ms,
+                camera.dropped_frames,
+            )
+            if not show_window:
+                continue
+            frame = frame.copy()
             cv2.line(
                 frame, (width // 2, 0), (width // 2, height), (255, 255, 0), 1
             )
@@ -480,7 +672,7 @@ def main():
                         frame,
                         f"{number} | {position}",
                         (x1, max(y1 - 12, 25)),
-                        cv2.font_hershey_simplex,
+                        cv2.FONT_HERSHEY_SIMPLEX,
                         0.65,
                         (0, 255, 0),
                         2,
@@ -493,11 +685,14 @@ def main():
         with frame_ready:
             running = False
             frame_ready.notify_all()
-        sender.close()
         camera.release()
+        worker.join()
+        preview.close()
+        if replay is not None:
+            replay.drain_sender(sender)
+        sender.close()
         if show_window:
             cv2.destroyAllWindows()
-        worker.join(timeout=2)
         visibility_file.close()
 
 
