@@ -10,6 +10,9 @@ install:
 	@test -f .env || (umask 077; cp .env.example .env)
 	@mkdir -p checkpoints
 	$(STACK) build
+	$(STACK) run --rm --no-deps --user "$$(id -u):$$(id -g)" \
+		-v "$(CURDIR)/checkpoints:/app/checkpoints:rw" \
+		camera python download_models.py
 
 run:
 	@test -f .env || (echo "Create .env from .env.example first"; exit 1)

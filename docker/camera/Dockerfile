@@ -9,7 +9,7 @@ RUN groupadd --gid 10001 anpr && useradd --uid 10001 --gid anpr --create-home an
 RUN pip install --no-cache-dir --index-url ${TORCH_INDEX} torch==2.9.1 torchvision==0.24.1
 COPY docker/camera/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && pip check
-COPY live_preview.py anpr_diagnostics.py ./
+COPY download_models.py live_preview.py anpr_diagnostics.py ./
 COPY camera.py video_stream.py video_settings.py check_rtsp.py event_sender.py plate_validator.py ./
 COPY full_stand/ ./full_stand/
 COPY ocr_model/ ./ocr_model/

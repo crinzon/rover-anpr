@@ -26,6 +26,7 @@ jobs:
           git archive --format=tar.gz --prefix=rover-anpr/ --output=rover-anpr-source.tar.gz HEAD -- \
             README.md VERSION Makefile .env.example .gitignore .dockerignore .gitattributes \
             pyproject.toml requirements.txt requirements-dev.txt .githooks .github \
+            download_models.py \
             camera.py video_stream.py video_settings.py plate_validator.py event_sender.py \
             api.py database.py live_preview.py anpr_diagnostics.py check_rtsp.py \
             evaluate_videos.py full_stand ocr_model/nn/model.py ocr_model/nn/inference.py \

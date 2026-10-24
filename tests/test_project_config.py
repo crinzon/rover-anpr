@@ -54,11 +54,11 @@ class ProjectConfigTest(unittest.TestCase):
             )
             self.assertEqual((root / ".env").read_bytes(), original)
             commands = log.read_text().splitlines()
-            self.assertEqual(len(commands), 4)
+            self.assertEqual(len(commands), 6)
             self.assertTrue(
                 all("--project-name rover-anpr" in c for c in commands)
             )
-            self.assertIn("up -d --no-build", commands[1])
+            self.assertIn("up -d --no-build", commands[2])
 
     def test_hook_increment_retry_and_invalid_version_without_commits(self):
         # The fake git models index state; the real repository is never used.
