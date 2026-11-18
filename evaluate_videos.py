@@ -10,6 +10,7 @@ import csv
 import hashlib
 import json
 import math
+import mmap
 import statistics
 import struct
 import threading
@@ -67,8 +68,14 @@ def percentile(values, percent):
 
 def mov_timing(path):
     """Read original MOV sample timings instead of estimated durations."""
-    data = path.read_bytes()
+    # Exports can be large: inspect tables without copying the entire MP4
+    # into Python memory. The parser below returns ordinary scalar values.
+    with path.open("rb") as source:
+        with mmap.mmap(source.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            return _mov_timing_data(data)
 
+
+def _mov_timing_data(data):
     def boxes(start, end):
         while start + 8 <= end:
             size, kind = struct.unpack_from(">I4s", data, start)
@@ -300,8 +307,7 @@ class FileReplay:
                 item["crop_path"] = "crops/" + name
             slim.append(item)
         rows = [
-            dict(frame=frame_id, video_time_s=media_time, **p)
-            for p in confirmed
+            dict(p, frame=frame_id, video_time_s=media_time) for p in confirmed
         ]
         self.confirmed.extend(rows)
         self.detections.extend(slim)

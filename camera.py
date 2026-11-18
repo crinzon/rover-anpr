@@ -1,4 +1,5 @@
 import csv
+import math
 import signal
 import threading
 import time
@@ -9,15 +10,23 @@ from pathlib import Path
 
 import cv2
 
-from anpr_diagnostics import Diagnostics, describe_plate, set_confirmation
+from anpr_diagnostics import Diagnostics, describe_plate
 from event_sender import EventSender
 from full_stand.config import StandConfig
 from full_stand.pipeline import PlatePipeline
 from live_preview import PreviewPublisher
+from plate_evidence import (
+    identity_compatible,
+    observation,
+    registry_supported,
+    reid_match,
+    remember_identity,
+    resolve,
+    spatial_match,
+)
 from plate_validator import (
-    confirmed_confidence,
-    is_valid_plate,
     normalize_plate,
+    plate_position,
 )
 from video_settings import load_env, stream_options
 from video_stream import VideoStream
@@ -38,6 +47,11 @@ def main(settings=None, replay=None, pipeline_override=None):
         else pipeline_override
     )
     session_id = replay.session_id if replay is not None else uuid.uuid4().hex
+    camera_id = (
+        settings.get("CAMERA_ID")
+        or getattr(replay, "camera_id", None)
+        or "unspecified"
+    )
     captures_dir = (
         replay.capture_dir
         if replay is not None
@@ -49,7 +63,11 @@ def main(settings=None, replay=None, pipeline_override=None):
     ocr_threshold = 0.85
     change_confirmations = 7
     track_timeout = 1.0
-    reid_timeout = 30.0
+    # Retain briefly lost identities, but recover only through strict OCR +
+    # geometry/motion gates. This is not permission to match by plate alone.
+    reid_timeout = float(settings.get("TRACK_REID_TIMEOUT", "3.0"))
+    if not math.isfinite(reid_timeout) or reid_timeout < track_timeout:
+        raise ValueError("TRACK_REID_TIMEOUT must be finite and >= 1 second")
     match_distance = 0.12
     quality_improvement = 0.08
     visibility_timeout = 1.0  # секунд без обнаружения до события ИСЧЕЗ
@@ -78,6 +96,8 @@ def main(settings=None, replay=None, pipeline_override=None):
         nonlocal running
         running = False
         camera.stop.set()
+        if replay is not None:
+            replay.interrupted = True
 
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, request_stop)
@@ -120,7 +140,8 @@ def main(settings=None, replay=None, pipeline_override=None):
             flush=True,
         )
 
-    sender = EventSender(
+    sender_factory = getattr(replay, "sender_factory", EventSender)
+    sender = sender_factory(
         api_url,
         capacity=int(settings.get("DELIVERY_QUEUE_SIZE", "256")),
         attempts=int(settings.get("DELIVERY_ATTEMPTS", "5")),
@@ -138,49 +159,29 @@ def main(settings=None, replay=None, pipeline_override=None):
             if replay is not None:
                 replay.record_submission(plate, queued)
 
-    def plate_distance(first, second):
-        if len(first) != len(second):
-            return 100
-        return sum(a != b for a, b in zip(first, second))
-
     def get_track_number(track):
         if not track["history"]:
             return None
         numbers = [item["plate"] for item in track["history"]]
         return Counter(numbers).most_common(1)[0][0]
 
-    def get_track_numbers(track):
-        return set(item["plate"] for item in track["history"])
-
     def match_reid(candidate, excluded_tracks, current_time):
         matches = []
         for track_id, track in tracks.items():
             if track_id in excluded_tracks:
                 continue
-            if current_time - track["last_seen"] > reid_timeout:
-                continue
-            reference = get_track_number(track)
-            if reference is None:
-                continue
-            difference = plate_distance(candidate["plate"], reference)
-            if difference > 1:
-                continue
-            history_numbers = get_track_numbers(track)
-            if candidate["plate"] in history_numbers:
-                difference = 0
-            matches.append((difference, track_id))
-        matches.sort()
-        if not matches:
-            return None
-        best_difference = matches[0][0]
-        best_matches = [
-            track_id
-            for difference, track_id in matches
-            if difference == best_difference
-        ]
-        if len(best_matches) != 1:
-            return None
-        return best_matches[0]
+            score = reid_match(
+                candidate,
+                track,
+                current_time,
+                reid_timeout,
+                match_distance,
+                min_confirmations,
+            )
+            if score is not None:
+                matches.append(track_id)
+        # Multiple plausible identities are ambiguous even if one is nearer.
+        return matches[0] if len(matches) == 1 else None
 
     def plate_quality(frame, box, confidence):
         h, w = frame.shape[:2]
@@ -197,20 +198,6 @@ def main(settings=None, replay=None, pipeline_override=None):
         quality = confidence * (0.45 * size_score + 0.55 * sharpness_score)
         return round(quality, 4), sharpness
 
-    def weighted_choice(items):
-        scores = {}
-        counts = Counter()
-        for item in items:
-            number = item["plate"]
-            counts[number] += 1
-            scores[number] = scores.get(number, 0.0) + max(
-                item["quality"], 0.01
-            )
-        if not scores:
-            return None, 0
-        number = max(scores, key=lambda value: (scores[value], counts[value]))
-        return number, counts[number]
-
     preview = (
         replay.preview if replay is not None else PreviewPublisher(settings)
     )
@@ -222,12 +209,12 @@ def main(settings=None, replay=None, pipeline_override=None):
         max_detections=config.max_detections,
         ocr_confidence=ocr_threshold,
         min_confirmations=min_confirmations,
-        recent_window=5,
+        recent_window=history_size,
         history_size=history_size,
         change_confirmations=change_confirmations,
         track_timeout=track_timeout,
         reid_timeout=reid_timeout,
-        rover_format="LDDDLLDD or LDDDLLDDD; letters ABEKMHOPCTYX",
+        rover_format="OCR subtype patterns; # is unknown",
     )
     diagnostics = (
         replay.diagnostics
@@ -255,6 +242,11 @@ def main(settings=None, replay=None, pipeline_override=None):
                 media_timestamp = latest_media_timestamp
                 # Claim before encoding/inference, including failed attempts.
                 last_processed_frame_id = frame_id
+            # Cross-process/host API timestamps must be wall-clock UTC, not
+            # monotonic seconds. Keep capture age, including IPC/queue delay.
+            captured_at = time.time() - max(
+                0.0, time.monotonic() - frame_timestamp
+            )
             inference_queue_ms = (time.monotonic() - frame_timestamp) * 1000
             input_started = time.perf_counter()
             success, buffer = cv2.imencode(".jpg", frame)
@@ -298,6 +290,11 @@ def main(settings=None, replay=None, pipeline_override=None):
                     text=normalize_plate(p["text"]),
                     confidence=p["confidence"],
                     confirmed=False,
+                    ocr_text=p.get("text", ""),
+                    raw_text=p.get("raw_text", ""),
+                    subtype=p.get("subtype"),
+                    status=p.get("status")
+                    or ("PENDING" if p.get("text") else "UNREADABLE"),
                 )
                 for p in plates
             ]
@@ -313,14 +310,10 @@ def main(settings=None, replay=None, pipeline_override=None):
             )
             candidates = []
             for plate in plates:
-                if (
-                    not plate["readable"]
-                    or plate["confidence"] < ocr_threshold
-                ):
+                observed = observation(plate, ocr_threshold)
+                if observed is None:
                     continue
-                number = normalize_plate(plate["text"])
-                if not is_valid_plate(number):
-                    continue
+                number, subtype = observed
                 x1, y1, x2, y2 = plate["box"]
                 plate_width = x2 - x1
                 plate_height = y2 - y1
@@ -328,30 +321,37 @@ def main(settings=None, replay=None, pipeline_override=None):
                 center_y = (y1 + y2) / 2
                 x = center_x / width
                 y = center_y / height
-                direction = (
-                    "LEFT" if x < 0.4 else "RIGHT" if x > 0.6 else "CENTER"
-                )
                 quality, sharpness = plate_quality(
                     frame, plate["box"], plate["confidence"]
                 )
                 candidates.append(
                     {
+                        "frame_id": frame_id,
+                        "camera_id": camera_id,
+                        "session_id": session_id,
                         "quality": quality,
                         "sharpness": sharpness,
                         "plate": number,
+                        "subtype": subtype,
                         "box": plate["box"],
                         "center": (x, y),
+                        "normalized_box": [
+                            x1 / width,
+                            y1 / height,
+                            x2 / width,
+                            y2 / height,
+                        ],
                         "width": plate_width,
                         "height": plate_height,
-                        "position": {
-                            "x": round(x - 0.5, 3),
-                            "y": round(y - 0.5, 3),
-                            "offset_x_px": round(center_x - width / 2),
-                            "offset_y_px": round(center_y - height / 2),
-                            "direction": direction,
-                        },
+                        "position": plate_position(
+                            plate["box"], width, height
+                        ),
                         "distance_m": None,
                         "confidence": round(plate["confidence"], 3),
+                        "character_probabilities": {
+                            p["position"]: p["probability"]
+                            for p in plate.get("characters", [])
+                        },
                     }
                 )
                 print(
@@ -372,17 +372,76 @@ def main(settings=None, replay=None, pipeline_override=None):
             pairs = []
             for candidate_index, candidate in enumerate(candidates):
                 for track_id, track in tracks.items():
+                    if track.get("subtype") != candidate["subtype"]:
+                        continue
                     if current_time - track["last_seen"] > track_timeout:
                         continue
-                    dx = candidate["center"][0] - track["center"][0]
-                    dy = candidate["center"][1] - track["center"][1]
-                    distance = (dx * dx + dy * dy) ** 0.5
-                    if distance <= match_distance:
+                    if not identity_compatible(candidate, track):
+                        continue
+                    # A missing detection/OCR frame is a reacquisition even
+                    # inside the active timeout. Do not allow one-character
+                    # substitutions to join similar cars across that gap.
+                    previous_frame = track["history"][-1]["frame_id"]
+                    if previous_frame != frame_id - 1:
+                        # Rejected OCR is not a lost detector when the existing
+                        # unique geometry bridge
+                        # observed this object last
+                        # frame.
+                        # Require strict visible agreement here; a genuine lost
+                        # box still goes through the stricter re-ID path below.
+                        if track.get(
+                            "motion_frame_id"
+                        ) != frame_id - 1 or not identity_compatible(
+                            candidate,
+                            track,
+                            max_conflicts=0,
+                            min_shared=max(
+                                min_confirmations,
+                                (len(candidate["plate"]) + 1) // 2,
+                            ),
+                        ):
+                            continue
+                    distance = spatial_match(
+                        candidate, track, current_time, match_distance
+                    )
+                    if distance is not None:
                         pairs.append((distance, candidate_index, track_id))
             pairs.sort()
+            pair_candidates = Counter(index for _, index, _ in pairs)
+            pair_tracks = Counter(track_id for _, _, track_id in pairs)
             assignments = {}
             used_tracks = set()
+            reidentified = set()
+            # A newly spawned, unadmitted OCR-noise track must not steal a
+            # geometrically/temporally supported exact return of an older
+            # identity. Respect all ambiguity checks before the greedy pass.
+            recovery_proposals = {}
+            for candidate_index, candidate in enumerate(candidates):
+                direct = [
+                    tid for _, index, tid in pairs if index == candidate_index
+                ]
+                if any(
+                    tracks[tid].get("registry_admitted", False)
+                    for tid in direct
+                ):
+                    continue
+                recovered = match_reid(candidate, set(), current_time)
+                if recovered is not None:
+                    recovery_proposals.setdefault(recovered, []).append(
+                        candidate_index
+                    )
+            for track_id, indices in recovery_proposals.items():
+                if len(indices) == 1:
+                    assignments[indices[0]] = track_id
+                    used_tracks.add(track_id)
+                    reidentified.add(track_id)
             for distance, candidate_index, track_id in pairs:
+                if (
+                    pair_candidates[candidate_index] > 1
+                    or pair_tracks[track_id] > 1
+                ):
+                    # Resolve by strict evidence below, never nearest-only.
+                    continue
                 if candidate_index in assignments:
                     continue
                 if track_id in used_tracks:
@@ -410,29 +469,41 @@ def main(settings=None, replay=None, pipeline_override=None):
                     continue
                 assignments[candidate_index] = track_id
                 used_tracks.add(track_id)
+                reidentified.add(track_id)
                 print(
                     f"Повторная идентификация: "
                     f"объект {track_id} | "
                     f"{candidates[candidate_index]['plate']}"
                 )
             confirmed_plates = []
+            observations_to_api = []
             display_plates = []
             for candidate_index, candidate in enumerate(candidates):
                 if candidate_index in assignments:
                     track_id = assignments[candidate_index]
                     track = tracks[track_id]
+                    association = (
+                        "reid" if track_id in reidentified else "continuous"
+                    )
+                    association_gap = current_time - track["last_seen"]
                 else:
                     track_id = next_track_id
                     next_track_id += 1
                     track = {
+                        "camera_id": camera_id,
+                        "session_id": session_id,
                         "center": candidate["center"],
+                        "subtype": candidate["subtype"],
                         "history": deque(maxlen=history_size),
+                        "motion_history": deque(maxlen=history_size),
                         "last_seen": current_time,
                         "visible": True,
                         "best_quality": -1.0,
                         "confirmed_number": None,
+                        "confirmed_subtype": None,
                     }
                     tracks[track_id] = track
+                    association, association_gap = "new", 0.0
                     log_visibility(
                         "ПОЯВИЛСЯ",
                         track_id,
@@ -444,72 +515,124 @@ def main(settings=None, replay=None, pipeline_override=None):
                     gap = current_time - track["last_seen"]
                     track["visible"] = True
                     log_visibility("ВЕРНУЛСЯ", track_id, track, gap)
+                track["motion_history"].append(
+                    dict(
+                        tracking_time=current_time, center=candidate["center"]
+                    )
+                )
+                track["motion_seen"] = current_time
+                track["motion_frame_id"] = frame_id
+                track["normalized_box"] = candidate["normalized_box"]
                 track["center"] = candidate["center"]
                 track["last_seen"] = current_time
                 track["history"].append(
                     {
                         "frame_id": frame_id,
+                        "track_id": track_id,
+                        "character_probabilities": candidate[
+                            "character_probabilities"
+                        ],
                         "timestamp": frame_timestamp,
+                        "tracking_time": current_time,
+                        "center": candidate["center"],
                         "plate": candidate["plate"],
+                        "subtype": candidate["subtype"],
                         "confidence": candidate["confidence"],
                         "width": candidate["width"],
                         "quality": candidate["quality"],
                     }
                 )
-                numbers = [item["plate"] for item in track["history"]]
-                if track["confirmed_number"] is None:
-                    recent = list(track["history"])[-5:]
-                    number, count = weighted_choice(recent)
-                    if sample_debug:
-                        item = next(
-                            p
-                            for p in diagnostic_plates
-                            if p["box"] == candidate["box"]
-                        )
-                        set_confirmation(
-                            item,
-                            track_id,
-                            count,
-                            min_confirmations,
-                            track["confirmed_number"],
-                        )
-                    if count < min_confirmations:
-                        continue
-                    track["confirmed_number"] = number
-                else:
-                    number = track["confirmed_number"]
-                    candidate_number, candidate_count = weighted_choice(
-                        track["history"]
-                    )
-                    if (
-                        candidate_number != number
-                        and candidate_count >= change_confirmations
-                    ):
-                        track["confirmed_number"] = candidate_number
-                        number = candidate_number
-                        print(
-                            f"Подтверждена смена номера объекта "
-                            f"{track_id}: {number}"
-                        )
-                    count = numbers.count(number)
+                merged = resolve(
+                    track["history"],
+                    track["confirmed_number"],
+                    track.get("confirmed_subtype"),
+                    min_confirmations,
+                    change_confirmations,
+                )
+                track["confirmed_number"] = merged["confirmed_number"]
+                track["confirmed_subtype"] = merged["confirmed_subtype"]
+                number, status = merged["plate"], merged["status"]
+                track["association_number"] = number
+                track["association_evidence"] = merged["character_evidence"]
+                remember_identity(
+                    track, merged, current_time, min_confirmations
+                )
+                # Keep provisional readings in Live, but do not persist
+                # one/two-frame objects. Once admitted, retain this identity
+                # through occlusion without creating a new database record.
+                track["registry_admitted"] = track.get(
+                    "registry_admitted", False
+                ) or registry_supported(merged, min_confirmations)
+                # Partial wrong-layout OCR over a
+                # continuously observed admitted
+                # object is not evidence of a second real plate. It remains in
+                # Live but is not persisted or mixed into the owner's history.
+                quarantine = []
+                if "#" in candidate["plate"]:
+                    for other_id, other in tracks.items():
+                        if (
+                            other_id == track_id
+                            or not other.get("registry_admitted")
+                            or not other.get("confirmed_number")
+                            or other.get("subtype") == candidate["subtype"]
+                            or other.get("motion_frame_id")
+                            not in (frame_id - 1, frame_id)
+                        ):
+                            continue
+                        if (
+                            spatial_match(
+                                candidate, other, current_time, match_distance
+                            )
+                            is not None
+                        ):
+                            quarantine.append(other_id)
+                if len(quarantine) == 1:
+                    track["registry_admitted"] = False
+                observation_id = uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    repr((camera_id, session_id, track_id, frame_id)),
+                ).hex
                 if sample_debug:
                     item = next(
                         p
                         for p in diagnostic_plates
                         if p["box"] == candidate["box"]
                     )
-                    set_confirmation(
-                        item,
-                        track_id,
-                        count,
-                        min_confirmations,
-                        number,
-                        history=numbers,
-                        change_required=change_confirmations,
+                    item.update(
+                        track_id=track_id,
+                        merged_text=number,
+                        camera_id=camera_id,
+                        observation_id=observation_id,
+                        registry_quarantine=quarantine,
+                        recognition_status=status,
+                        position=candidate["position"],
+                        association=association,
+                        association_gap_s=association_gap,
+                        confirmed_number=merged["confirmed_number"],
+                        character_evidence=merged["character_evidence"],
+                        status="confirmed"
+                        if status == "CONFIRMED"
+                        else "partial"
+                        if status == "PARTIAL"
+                        else "waiting_confirmation",
+                        reasons=[]
+                        if status == "CONFIRMED"
+                        else ["unknown_or_conflicting_characters"]
+                        if status == "PARTIAL"
+                        else ["insufficient_confirmations"],
                     )
                 for item in live_plates:
                     if item["box"] == candidate["box"]:
-                        item["confirmed"] = candidate["plate"] == number
+                        item.update(
+                            text=number,
+                            subtype=merged["subtype"],
+                            track_id=track_id,
+                            camera_id=camera_id,
+                            observation_id=observation_id,
+                            position=candidate["position"],
+                            status=status,
+                            confirmed=status == "CONFIRMED",
+                        )
                 display_plates.append(
                     {
                         "box": candidate["box"],
@@ -517,33 +640,32 @@ def main(settings=None, replay=None, pipeline_override=None):
                         "position": candidate["position"]["direction"],
                     }
                 )
-                average_confidence = confirmed_confidence(
-                    track["history"], number
-                )
-                if average_confidence is None:
-                    if sample_debug:
-                        debug_item = next(
-                            p
-                            for p in diagnostic_plates
-                            if p["box"] == candidate["box"]
-                        )
-                        debug_item["status"] = "waiting_confirmation"
-                        debug_item["reasons"] = [
-                            "confirmed_label_missing_from_history"
-                        ]
-                    continue
                 quality = candidate["quality"]
                 confirmed = {
+                    "camera_id": camera_id,
+                    "observation_id": observation_id,
                     "track_id": track_id,
+                    "frame_id": frame_id,
+                    "captured_at": captured_at,
+                    "video_time_s": (
+                        media_timestamp if replay is not None else None
+                    ),
                     "plate": number,
+                    "observed_plate": candidate["plate"],
+                    "subtype": merged["subtype"],
+                    "status": status,
+                    "confirmed": status == "CONFIRMED",
+                    "character_evidence": merged["character_evidence"],
                     "position": candidate["position"],
                     "distance_m": None,
-                    "confidence": round(average_confidence, 3),
+                    "confidence": round(merged["confidence"], 3),
                     "quality": round(quality, 4),
                 }
                 number_changed = track.get("saved_number") != number
                 photo_matches_number = candidate["plate"] == number
-                should_save = photo_matches_number and (
+                should_save = (
+                    status == "CONFIRMED" and photo_matches_number
+                ) and (
                     number_changed
                     or quality > track["best_quality"] + quality_improvement
                 )
@@ -562,17 +684,89 @@ def main(settings=None, replay=None, pipeline_override=None):
                         confirmed["image_path"] = f"{prefix}/{filename}"
                         track["best_quality"] = quality
                         track["saved_number"] = number
-                confirmed_plates.append(confirmed)
+                if track["registry_admitted"]:
+                    observations_to_api.append(confirmed)
+                if status == "CONFIRMED":
+                    confirmed_plates.append(confirmed)
                 print(
                     f"Объект {track_id}: {number} "
-                    f"({count}/{len(track['history'])}) | "
+                    f"({status}, {len(track['history'])} observations) | "
                     f"Качество: {quality:.1%}"
                 )
+            # A plate-shaped detection may remain usable for geometry while
+            # OCR is rejected/noisy. Bridge only uniquely overlapping admitted
+            # tracks, never add character votes or extend last valid OCR time.
+            # A detection assigned to a different admitted
+            # identity is excluded.
+            assigned_boxes = {
+                tuple(candidates[i]["box"]): tid
+                for i, tid in assignments.items()
+            }
+            motion_proposals = {}
+            for track_id, track in tracks.items():
+                if track_id in used_tracks or not track.get(
+                    "registry_admitted", False
+                ):
+                    continue
+                matches = []
+                for raw_index, raw in enumerate(plates):
+                    owner = assigned_boxes.get(tuple(raw["box"]))
+                    if owner is not None and tracks[owner].get(
+                        "registry_admitted", False
+                    ):
+                        continue
+                    x1, y1, x2, y2 = raw["box"]
+                    geometry = dict(
+                        frame_id=frame_id,
+                        center=(
+                            (x1 + x2) / (2 * width),
+                            (y1 + y2) / (2 * height),
+                        ),
+                        normalized_box=[
+                            x1 / width,
+                            y1 / height,
+                            x2 / width,
+                            y2 / height,
+                        ],
+                    )
+                    if (
+                        spatial_match(
+                            geometry, track, current_time, match_distance
+                        )
+                        is not None
+                    ):
+                        matches.append((raw_index, geometry))
+                if len(matches) == 1:
+                    raw_index, geometry = matches[0]
+                    motion_proposals.setdefault(raw_index, []).append(
+                        (track_id, geometry)
+                    )
+            for raw_index, proposals in motion_proposals.items():
+                if len(proposals) != 1:
+                    continue
+                track_id, geometry = proposals[0]
+                track = tracks[track_id]
+                track.update(
+                    center=geometry["center"],
+                    normalized_box=geometry["normalized_box"],
+                    motion_seen=current_time,
+                    motion_frame_id=frame_id,
+                )
+                track["motion_history"].append(
+                    dict(tracking_time=current_time, center=geometry["center"])
+                )
+                if sample_debug:
+                    diagnostic_plates[raw_index]["motion_only_track_id"] = (
+                        track_id
+                    )
             completed.append(time.monotonic())
             fps = (
                 (len(completed) - 1) / (completed[-1] - completed[0])
                 if len(completed) > 1
                 else 0.0
+            )
+            getattr(preview, "record_readings", lambda *args: None)(
+                frame, plates, live_plates, captured_at, session_id
             )
             preview.update_results(
                 live_plates,
@@ -582,7 +776,19 @@ def main(settings=None, replay=None, pipeline_override=None):
                 input_jpeg_ms,
                 inference_queue_ms,
                 inference_total_ms,
+                (getattr(replay, "current_meta", None) or {}).get(
+                    "frame_id", frame_id
+                ),
             )
+            if settings.get("LIVE_MATCHED_ONLY", "false").lower() == "true":
+                preview.submit(
+                    frame,
+                    frame_timestamp,
+                    camera.capture_fps,
+                    camera.capture_read_ms,
+                    camera.dropped_frames,
+                    frame_id,
+                )
             if sample_debug:
                 diagnostics.finish(
                     output,
@@ -594,8 +800,19 @@ def main(settings=None, replay=None, pipeline_override=None):
             with lock:
                 results = display_plates
                 result_time = time.monotonic()
-            if confirmed_plates:
-                send_to_api(confirmed_plates)
+            if observations_to_api:
+                send_to_api(observations_to_api)
+            worker_timings = dict(output["timing_ms"])
+            worker_timings.update(
+                input_jpeg=input_jpeg_ms,
+                queue=inference_queue_ms,
+                pipeline_call=inference_total_ms,
+                worker_cycle=(time.perf_counter() - input_started) * 1000,
+            )
+            output["worker_timing_ms"] = worker_timings
+            getattr(preview, "record_timings", lambda timings: None)(
+                worker_timings
+            )
             if replay is not None:
                 replay.record_frame(
                     frame_id,
@@ -614,6 +831,7 @@ def main(settings=None, replay=None, pipeline_override=None):
             diagnostics.error("worker_failed")
             print("Recognition worker stopped: worker_failed", flush=True)
             if replay is not None:
+                getattr(replay, "record_worker_error", lambda: None)()
                 replay.fail_worker()
 
     worker = threading.Thread(target=recognize_guarded, daemon=True)
@@ -640,12 +858,19 @@ def main(settings=None, replay=None, pipeline_override=None):
                 age = time.monotonic() - result_time
             if replay is not None:
                 replay.wait_frame(latest_frame_id)
+                if getattr(replay, "owns_preview", False):
+                    continue
+            if settings.get("LIVE_MATCHED_ONLY", "false").lower() == "true":
+                continue
             preview.submit(
                 frame,
                 camera.last_frame_timestamp,
                 camera.capture_fps,
                 camera.capture_read_ms,
                 camera.dropped_frames,
+                (getattr(camera, "current_meta", None) or {}).get(
+                    "frame_id", latest_frame_id
+                ),
             )
             if not show_window:
                 continue
@@ -677,6 +902,21 @@ def main(settings=None, replay=None, pipeline_override=None):
                         (0, 255, 0),
                         2,
                     )
+            capture_rate = camera.capture_fps
+            capture_label = (
+                f"{capture_rate:.1f}" if capture_rate is not None else "n/a"
+            )
+            anpr_rate = getattr(preview, "results", ([], None))[1]
+            anpr_label = f"{anpr_rate:.1f}" if anpr_rate is not None else "n/a"
+            cv2.putText(
+                frame,
+                f"Capture {capture_label} FPS | ANPR {anpr_label} FPS",
+                (12, 24),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2,
+            )
             if show_window:
                 cv2.imshow("Rover ANPR", frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):

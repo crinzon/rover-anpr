@@ -26,6 +26,7 @@ generated
 real_plates*
 test_videos
 evaluation_results
+results
 checkpoints
 *.pt
 *.MOV

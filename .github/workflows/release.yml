@@ -27,11 +27,13 @@ jobs:
             README.md VERSION Makefile .env.example .gitignore .dockerignore .gitattributes \
             pyproject.toml requirements.txt requirements-dev.txt .githooks .github \
             download_models.py \
-            camera.py video_stream.py video_settings.py plate_validator.py event_sender.py \
-            api.py database.py live_preview.py anpr_diagnostics.py check_rtsp.py \
+            camera.py video_stream.py video_settings.py plate_validator.py plate_formats.py plate_evidence.py event_sender.py \
+            api.py database.py current_plates.py vehicle_registry.py live_preview.py anpr_diagnostics.py check_rtsp.py \
+            process_video.py video_demo.py webcam_anpr.py run_rtsp_camera.py start_video_demo.ps1 \
             evaluate_videos.py full_stand ocr_model/nn/model.py ocr_model/nn/inference.py \
             ocr_model/utils/alphabet.py ocr_model/utils/geometry.py static tests \
-            compose.yaml compose.cuda.yaml docker docs/architecture.puml
+            compose.yaml compose.cuda.yaml docker docs/architecture.puml docs/api-contract.md docs/plate-formats.md \
+            docs/live-readings.md docs/video-demo.md docs/video-processing.md
           sha256sum rover-anpr-source.tar.gz > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:

@@ -84,6 +84,20 @@ probe(stream, 30)
                 VideoStream(0, **kwargs)
 
     def test_probe_has_no_model_imports(self):
-        self.assertNotIn("torch", sys.modules)
-        self.assertNotIn("full_stand.pipeline", sys.modules)
+        # Other integration tests may already have imported OCR. Verify a
+        # cold probe import instead of depending on test execution order.
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                "import check_rtsp, sys; "
+                "assert 'torch' not in sys.modules; "
+                "assert 'full_stand.pipeline' not in sys.modules",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIsNotNone(importlib.util.find_spec("check_rtsp"))

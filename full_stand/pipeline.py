@@ -252,6 +252,11 @@ class PlatePipeline:
                         "raw_text": raw_text,
                         "subtype": subtype,
                         "readable": readable,
+                        "status": "UNREADABLE"
+                        if not readable
+                        else "PARTIAL"
+                        if "#" in text
+                        else "READ",
                         "valid": is_valid_plate(text, subtype),
                         "confidence": float(confidence[slot]),
                         "detection": float(scores[index]),

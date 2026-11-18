@@ -17,6 +17,9 @@ select = ["E", "W", "F", "I", "N"]
 "tests/check_replay.py" = ["E402", "N802"]
 # OpenCV-compatible fake interfaces use its method names.
 "tests/test_video_stream.py" = ["N802"]
+"tests/test_webcam_anpr.py" = ["N802"]
+"tests/test_process_video.py" = ["N802"]
+"tests/check_process_video.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

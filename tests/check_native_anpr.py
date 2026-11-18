@@ -10,6 +10,7 @@ import threading
 import time
 import types
 import unittest
+import uuid
 from collections import Counter, deque
 from datetime import datetime
 from pathlib import Path
@@ -25,10 +26,20 @@ from anpr_diagnostics import describe_plate, set_confirmation
 from full_stand.config import StandConfig
 from full_stand.detection import PlateDetector
 from full_stand.pipeline import PlatePipeline
+from plate_evidence import (
+    identity_compatible,
+    observation,
+    registry_supported,
+    reid_match,
+    remember_identity,
+    resolve,
+    spatial_match,
+)
 from plate_validator import (
     confirmed_confidence,
     is_valid_plate,
     normalize_plate,
+    plate_position,
 )
 
 
@@ -181,12 +192,22 @@ class NativeANPRTest(unittest.TestCase):
             Counter=Counter,
             deque=deque,
             config=types.SimpleNamespace(imgsz=640),
+            identity_compatible=identity_compatible,
+            spatial_match=spatial_match,
+            reid_match=reid_match,
+            observation=observation,
+            resolve=resolve,
+            registry_supported=registry_supported,
             normalize_plate=normalize_plate,
+            plate_position=plate_position,
             is_valid_plate=is_valid_plate,
             confirmed_confidence=confirmed_confidence,
             describe_plate=describe_plate,
             set_confirmation=set_confirmation,
             session_id="synthetic",
+            camera_id="synthetic_camera",
+            uuid=uuid,
+            remember_identity=remember_identity,
             log_visibility=lambda *a, **k: None,
             match_reid=lambda *a: None,
             send_to_api=lambda items: events.extend(items),
@@ -205,7 +226,6 @@ class NativeANPRTest(unittest.TestCase):
         score, sharpness = quality(frame, source_plate["box"], 0.95)
         self.assertGreater(score, 0)
         self.assertGreater(sharpness, 0)
-        nested("weighted_choice", state)
         worker = nested("recognize", state)
 
         def run():
@@ -241,9 +261,21 @@ class NativeANPRTest(unittest.TestCase):
                 )
                 self.assertEqual(samples[2][0]["status"], "confirmed")
                 deadline = time.monotonic() + 1
-                while not events and time.monotonic() < deadline:
+                while (
+                    not any(e.get("status") == "CONFIRMED" for e in events)
+                    and time.monotonic() < deadline
+                ):
                     time.sleep(0.01)
                 self.assertEqual(events[0]["plate"], "A123AA77")
+                self.assertEqual(events[0]["status"], "CONFIRMED")
+                self.assertEqual(len(events), 1)
+                confirmed_events = [
+                    e for e in events if e["status"] == "CONFIRMED"
+                ]
+                self.assertEqual(confirmed_events[0]["frame_id"], 3)
+                self.assertLessEqual(events[0]["captured_at"], time.time())
+                self.assertEqual(events[0]["position"]["offset_x_px"], -120)
+                self.assertEqual(events[0]["position"]["offset_y_px"], -110)
                 self.assertTrue(list(Path(directory).glob("*.jpg")))
             finally:
                 with condition:

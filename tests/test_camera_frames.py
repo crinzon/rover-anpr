@@ -5,8 +5,10 @@ import threading
 import time
 import types
 import unittest
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
+
+from plate_evidence import observation, resolve
 
 
 class CameraFramesTest(unittest.TestCase):
@@ -14,7 +16,7 @@ class CameraFramesTest(unittest.TestCase):
         self, encode_ok=True, inference_error=False, detection=False
     ):
         source = Path(__file__).resolve().parents[1] / "camera.py"
-        tree = ast.parse(source.read_text())
+        tree = ast.parse(source.read_text(encoding="utf-8"))
         worker = next(
             n
             for n in ast.walk(tree)
@@ -55,10 +57,15 @@ class CameraFramesTest(unittest.TestCase):
 
         state = dict(
             running=True,
+            session_id="frame-test",
+            settings={},
             replay=None,
             latest_media_timestamp=0.0,
             deque=deque,
+            Counter=Counter,
             normalize_plate=lambda value: value,
+            observation=observation,
+            resolve=resolve,
             ocr_threshold=0.85,
             diagnostics=types.SimpleNamespace(
                 due=lambda: False, error=lambda *a: None

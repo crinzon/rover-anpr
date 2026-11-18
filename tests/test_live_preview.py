@@ -89,6 +89,10 @@ class PreviewTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as directory,
             patch.dict("sys.modules", cv2=cv2),
+            patch(
+                "live_preview.plate_crop",
+                return_value="data:image/jpeg;base64,test",
+            ),
         ):
             path = Path(directory) / "preview"
             publisher = PreviewPublisher(
@@ -111,7 +115,13 @@ class PreviewTest(unittest.TestCase):
                     if path.exists():
                         break
                     time.sleep(0.005)
-                self.assertEqual(read_preview(path)[1]["plates"], plates)
+                self.assertEqual(
+                    read_preview(path)[1]["plates"],
+                    [
+                        dict(p, crop="data:image/jpeg;base64,test")
+                        for p in plates
+                    ],
+                )
                 self.assertEqual(sizes, [(1280, 720)])
                 self.assertEqual(rectangles[0][1:3], ((100, 100), (200, 200)))
                 publisher.submit(Frame(), time.monotonic())

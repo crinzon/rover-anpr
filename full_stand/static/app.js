@@ -291,6 +291,7 @@ function renderPane() {
 function rowMarkup(plate, index) {
     const weak = plate.confidence < 0.6;
     const meta = [`<span>${esc(plate.subtype)}</span>`, `<span class="${weak ? 'flag' : ''}">${pct(plate.confidence)}</span>`];
+    if (plate.status === 'PARTIAL') meta.push('<span class="flag">PARTIAL</span>');
     if (plate.readable) meta.push(plate.valid ? '<span class="good">ГОСТ</span>' : '<span class="flag">вне ГОСТ</span>');
 
     const glyphs = plate.characters.map((item) => {

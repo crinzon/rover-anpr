@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir --index-url ${TORCH_INDEX} torch==2.9.1 torchvisi
 COPY docker/camera/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && pip check
 COPY download_models.py live_preview.py anpr_diagnostics.py ./
-COPY camera.py video_stream.py video_settings.py check_rtsp.py event_sender.py plate_validator.py ./
+COPY camera.py video_stream.py video_settings.py check_rtsp.py event_sender.py plate_validator.py plate_formats.py plate_evidence.py vehicle_registry.py ./
 COPY full_stand/ ./full_stand/
 COPY ocr_model/ ./ocr_model/
 RUN mkdir -p /app/captures && chown -R anpr:anpr /app

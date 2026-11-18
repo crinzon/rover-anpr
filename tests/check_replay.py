@@ -97,13 +97,20 @@ try:
         assert not report["errors"], report["errors"]
         assert report["confirmed_observations"] == 4
         assert report["api"]["acknowledged"] == len(received) == 4
+        assert [r["plates"][0]["status"] for r in received] == [
+            "CONFIRMED",
+            "CONFIRMED",
+            "CONFIRMED",
+            "CONFIRMED",
+        ]
         assert report["confirmed_tracks"][0]["plates"] == ["A123AA77"]
         assert replay.frames[-1]["video_time_s"] < 0.3
         assert (root / "artifacts" / "frames.jsonl").is_file()
         print(
             (
                 "PASS: six original-worker frames, video-time tracking, "
-                "four acknowledged API events"
+                "four acknowledged API events; provis"
+                "ional frames stay out of registry"
             )
         )
 finally:

@@ -4,10 +4,33 @@
 <title>Rover ANPR · Камера</title>
 <style>
 body{margin:0;background:#101820;color:#edf3f7;font:16px system-ui}main{max-width:1920px;margin:auto;padding:24px}header{display:flex;justify-content:space-between;align-items:center}h1{font-size:24px}#state{color:#ffd166}.video{position:relative;background:#05090c;min-height:240px;border-radius:12px;overflow:hidden}canvas{display:block;width:100%;height:auto}#lost{position:absolute;inset:0;display:grid;place-items:center;background:#101820ed;font-size:24px}#stats,#timing{padding:12px 0;color:#adc6d5}li{padding:8px}footer{color:#adc6d5;font-size:14px}
-</style>
-<main><header><h1>Rover ANPR</h1><span id="state">Подключение…</span></header>
-<div class="video"><canvas width="1920" height="1080" aria-label="Живое видео камеры"></canvas><div id="lost">Нет сигнала</div></div>
-<div id="anpr-health" role="status"></div><div id="stats">Ожидание кадров</div><div id="timing"></div><ul id="plates"></ul>
+.plate-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:8px 0}.plate-card{background:#1b2b36;border:1px solid #385064;border-radius:8px;padding:8px}.plate-card img{display:block;width:100%;height:80px;object-fit:contain}.plate-card strong{font-size:22px}.plate-card small{display:block;color:#adc6d5}button{padding:7px 10px}#timing{font-size:12px}main{padding:12px}
+html,body{height:100%;overflow:hidden;font-size:13px}main{height:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:5px;padding:8px}
+header{flex:0 0 26px}h1{font-size:17px;margin:0}#stream-fps{font-variant-numeric:tabular-nums;color:#adc6d5}#state{font-size:11px}
+#demo-controls{padding:0!important;flex:0 0 auto}#demo-controls p{display:flex;gap:4px;margin:0 0 3px}select{min-width:0;flex:1;padding:4px!important}button{padding:4px 7px;font-size:12px;white-space:nowrap}
+.video{flex:none;height:clamp(150px,35vh,360px);width:100%;min-height:0;border-radius:8px;contain:layout paint;background:#030609}
+canvas{width:100%;height:100%;object-fit:contain}#lost{font-size:18px}
+section[aria-live]{flex:none;min-height:0}#current-count{display:block;height:19px;line-height:19px;font-size:12px}
+.plate-grid{height:160px;min-height:160px;max-height:160px;overflow:auto;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));grid-auto-rows:150px;align-content:start;gap:5px;margin:2px 0}
+.plate-card{height:150px;box-sizing:border-box;padding:6px;overflow:hidden;order:0}.plate-card strong{display:block;font-size:22px;line-height:26px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plate-card img{height:69px;width:100%;object-fit:contain}.plate-card small{font-size:11px;line-height:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plate-card[data-in-frame="false"]{opacity:.58;border-color:#53616b;order:1}.presence{display:block;font-size:11px;color:#7cdd9c;height:14px}.plate-card[data-in-frame="false"] .presence{color:#c1ccd4}
+#recognition-counts{font-size:11px;line-height:15px;height:45px;overflow:hidden;margin:4px 0}#stats{padding:0;font-size:11px;line-height:15px;height:15px;overflow:hidden;flex:none}
+#demo-state{font-size:11px;line-height:15px;height:15px;overflow:hidden;color:#adc6d5;font-variant-numeric:tabular-nums}#technical{position:absolute;bottom:3px;right:4px;z-index:3;background:#101820;max-width:95%;font-size:11px}
+#technical[open]{max-height:180px;overflow:auto;border:1px solid #385064;padding:8px}#anpr-health,#timing,footer,#history{display:none}details:has(#history){display:none}
+@media(max-height:620px){.video{height:29vh}.plate-grid{height:142px;min-height:142px;max-height:142px}.plate-card{height:136px}.plate-card img{height:55px}}
+#technical #timing,#technical #anpr-health{display:block;white-space:normal;height:auto}#technical #timing{font-size:11px}</style>
+<main><header><h1>Камера</h1><span id="stream-fps">ANPR — FPS</span><span id="state">Подключение…</span></header>
+<section id="demo-controls" hidden style="padding:12px 0">
+<p>
+<select id="demo-video" aria-label="Видео" style="max-width:100%;padding:8px"></select>
+<button id="demo-start">Start</button> <button id="demo-pause">Pause</button> <button id="demo-restart">Restart</button></p>
+<div id="demo-state">Ожидание Start</div><details id="technical"><summary>Диагностика</summary><div id="demo-info">Выберите видео и нажмите Start</div><div id="demo-resources"></div></details>
+</section><div class="video"><canvas width="1920" height="1080" aria-label="Живое видео камеры"></canvas><div id="lost">Нет сигнала</div></div>
+<section aria-live="polite"><strong id="current-count">Номера не обнаружены</strong><div id="current-plates" class="plate-grid"></div>
+<p id="recognition-counts">Детекций за прогон: 0 · OCR: 0 · Точность не оценена</p>
+</section><div id="anpr-health" role="status"></div><div id="stats">Ожидание кадров</div><div id="timing"></div><ul id="plates" hidden></ul>
+<details open><summary>История (последние 50 записей, включая PARTIAL)</summary><ul id="history"></ul></details>
 <section id="diagnostics" hidden>
 <h2>Диагностика ANPR · стоп-кадры инференса</h2>
 <p id="debug-state">Ожидание…</p>
@@ -22,54 +45,100 @@ body{margin:0;background:#101820;color:#edf3f7;font:16px system-ui}main{max-widt
 <div style="overflow:auto"><table><thead><tr><th>ID</th><th>Box на исходном кадре</th><th>YOLO confidence</th><th>Результат отбора</th></tr></thead><tbody id="debug-rows"></tbody></table></div>
 </section>
 <footer>Зелёная рамка — номер подтверждён · Жёлтая — ожидает подтверждения.<br>
-Рамки последних результатов ANPR скрываются при устаревании. Возраст считается от декодирования RTSP, без задержки самой камеры.</footer></main>
+Рамки последних результатов ANPR скрываются при устаревании. Возраст считается от декодирования источника, без задержки самой камеры.</footer></main>
 <script>
+const selectedCamera=new URLSearchParams(location.search).get('camera');
+const demoLane=selectedCamera==='DemoBack'?'Back':(['Demo','DemoFront'].includes(selectedCamera)?'Front':null);
+const isDemo=demoLane!==null;
+const cameraQuery=selectedCamera?'camera='+encodeURIComponent(selectedCamera):'';
 const state=document.getElementById('state'),lost=document.getElementById('lost'),stats=document.getElementById('stats'),timing=document.getElementById('timing'),plates=document.getElementById('plates');
 const canvas=document.querySelector('canvas'),context=canvas.getContext('2d');
-let after=0,targetFPS=20,lastDisplay=0,displayTimes=[];
+let after=0,afterFrame=0,targetFPS=20,lastDisplay=0,displayTimes=[],previewEpoch=0,displayedSession=null;
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const cardCache=new Map();
+function clearCards(){cardCache.clear();document.getElementById('current-plates').replaceChildren();}
+function expireCards(now=performance.now()){
+ for(const [key,entry] of cardCache){
+  if(!entry.current && now-entry.lastSeen>5000){entry.node.remove();cardCache.delete(key);continue}
+  entry.presence.textContent=entry.current?'Сейчас в кадре':`Последнее · ${Math.floor((now-entry.lastSeen)/1000)} с назад`;
+ }
+}
+function renderCurrent(rows,frameId){
+ const now=performance.now(),grid=document.getElementById('current-plates');
+ grid.dataset.frameId=frameId??'';grid.dataset.camera=selectedCamera||'';
+ document.getElementById('current-count').textContent=`Сейчас в кадре: ${rows.length} · ${demoLane||selectedCamera||'Камера'}`;
+ for(const entry of cardCache.values())entry.current=false;
+ for(const [index,p] of rows.entries()){
+  const key=p.track_id!=null?'track:'+p.track_id:'untracked:'+index;
+  // Untracked slots are presentation slots, not a second tracker or evidence.
+  if(p.track_id!=null && cardCache.has('untracked:'+index)){const old=cardCache.get('untracked:'+index);cardCache.delete('untracked:'+index);if(!cardCache.has(key)){old.node.dataset.key=key;cardCache.set(key,old)}else old.node.remove()}
+  let entry=cardCache.get(key);
+  if(!entry){
+   const node=document.createElement('article');node.className='plate-card';node.dataset.key=key;
+   const label=document.createElement('strong'),img=document.createElement('img'),info=document.createElement('small'),presence=document.createElement('span');presence.className='presence';img.hidden=true;
+   node.append(label,img,info,presence);grid.append(node);entry={node,label,img,info,presence};cardCache.set(key,entry);
+  }
+  const status=p.status||((p.text||p.ocr_text)?'PENDING':'UNREADABLE');
+  entry.current=true;entry.lastSeen=now;entry.node.dataset.frameId=frameId??'';entry.node.dataset.status=status;
+  const text=p.text||'Не прочитан';if(entry.label.textContent!==text)entry.label.textContent=text;
+  if(p.crop?.startsWith('data:image/jpeg;base64,')){entry.img.hidden=false;if(entry.img.getAttribute('src')!==p.crop)entry.img.src=p.crop}
+  else entry.img.hidden=true;
+  entry.info.textContent=`${demoLane||selectedCamera||'Камера'} · ${status} · ID ${p.track_id??'н/д'}`;
+ }
+ for(const entry of cardCache.values())entry.node.dataset.inFrame=String(entry.current);
+ expireCards(now);
+}
+setInterval(()=>expireCards(),250);
+
 async function preview(){
   while(true){
+    const epoch=previewEpoch;
     const start=performance.now(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),2000);
     try{
-      const response=await fetch('/live/frame?after='+after,{cache:'no-store',signal:controller.signal});
+      const response=await fetch('/live/frame?bundle=1&after='+after+'&after_frame='+afterFrame+'&session='+encodeURIComponent(displayedSession||'')+'&'+cameraQuery,{cache:'no-store',signal:controller.signal});
       if(response.status===503)throw Error('no signal');
       if(response.status===200){
-        const blob=await response.blob(),received=performance.now();
+        const packet=await response.json(),blob=await (await fetch(packet.image)).blob(),received=performance.now();
         const image=await createImageBitmap(blob),decoded=performance.now();
         try{
           await new Promise(requestAnimationFrame);
-          if(performance.now()-received+Number(response.headers.get("X-frame-age-ms"))>2000)continue;
+          if(!isDemo && performance.now()-received+Number(response.headers.get("X-frame-age-ms"))>2000)continue;
           if(canvas.width!==image.width||canvas.height!==image.height){canvas.width=image.width;canvas.height=image.height}
+          if(epoch!==previewEpoch)continue;
+          if(packet.session_id && packet.session_id!==displayedSession){clearCards();displayedSession=packet.session_id}
           context.drawImage(image,0,0);
+          renderCurrent(packet.plates||[],packet.frame_id);
         }finally{image.close()}
         const shown=performance.now(),rtt=received-start,decode=decoded-received;
         const metric=key=>Number(response.headers.get('X-'+key.replaceAll('_','-'))||0);
-        after=metric('timestamp');lastDisplay=shown;
+        after=metric('timestamp');afterFrame=packet.frame_id??0;lastDisplay=shown;
         displayTimes.push(shown);if(displayTimes.length>60)displayTimes.shift();
         const fps=displayTimes.length>1?(displayTimes.length-1)*1000/(shown-displayTimes[0]):0;
+        const captureValue=response.headers.get('X-capture-fps');
+        const captureLabel=captureValue && Number.isFinite(Number(captureValue))?Number(captureValue).toFixed(1):'н/д';
         const ageMin=metric('frame_age_ms')+(shown-received),ageMax=ageMin+rtt;
-        lost.style.display='none';state.textContent='Камера подключена';
-        stats.textContent=`Браузер ${fps.toFixed(1)} FPS · Превью ${metric('preview_fps').toFixed(1)} FPS · ANPR ${metric('fps').toFixed(1)} FPS / ${metric('processing_ms').toFixed(1)} мс · ${canvas.width}×${canvas.height}`;
-        timing.textContent=`Возраст кадра ${ageMin.toFixed(0)}–${ageMax.toFixed(0)} мс · ANPR целиком ${metric('inference_total_ms').toFixed(1)} мс · Подготовка ${metric('preview_render_ms').toFixed(1)} мс · JPEG ${metric('jpeg_ms').toFixed(1)} мс · IPC ${metric('capture_ipc_ms').toFixed(1)} мс · Volume ${metric('volume_write_ms').toFixed(1)} мс · До API ${metric('transfer_to_api_ms').toFixed(1)} мс · HTTP ${rtt.toFixed(1)} мс · Декодирование браузером ${decode.toFixed(1)} мс`;
+        lost.style.display='none';state.textContent=isDemo?'VIDEO DEMO':'Камера подключена';
+        document.getElementById('stream-fps').textContent=`ANPR ${metric('fps').toFixed(1)} FPS · Browser ${fps.toFixed(1)}`;
+        stats.textContent=`Capture ${captureLabel} FPS · Browser ${fps.toFixed(1)} FPS · Превью ${metric('preview_fps').toFixed(1)} FPS · ANPR ${metric('fps').toFixed(1)} FPS / ${metric('processing_ms').toFixed(1)} мс · ${canvas.width}×${canvas.height}`;
+        timing.textContent=`Возраст кадра ${ageMin.toFixed(0)}–${ageMax.toFixed(0)} мс · Вызов pipeline ${metric('inference_total_ms').toFixed(1)} мс · Подготовка ${metric('preview_render_ms').toFixed(1)} мс · JPEG ${metric('jpeg_ms').toFixed(1)} мс · IPC ${metric('capture_ipc_ms').toFixed(1)} мс · Volume ${metric('volume_write_ms').toFixed(1)} мс · До API ${metric('transfer_to_api_ms').toFixed(1)} мс · HTTP ${rtt.toFixed(1)} мс · Декодирование браузером ${decode.toFixed(1)} мс`;
       }else if(response.status!==204)throw Error('API');
     }catch{
-      if(performance.now()-lastDisplay>2000){lost.style.display='grid';state.textContent='Нет сигнала';displayTimes=[]}
+      if(performance.now()-lastDisplay>2000){lost.style.display='grid';state.textContent='Нет сигнала';displayTimes=[];renderCurrent([],null)}
     }finally{clearTimeout(timer)}
     await sleep(Math.max(5,1000/targetFPS-(performance.now()-start)));
   }
 }
 async function status(){
+  const epoch=previewEpoch;
   try{
-    const r=await fetch('/live/status',{cache:'no-store',signal:AbortSignal.timeout(2000)});
+    const r=await fetch('/live/status?'+cameraQuery,{cache:'no-store',signal:AbortSignal.timeout(2000)});
     if(!r.ok)throw Error();const s=await r.json();
-    const health=document.getElementById("anpr-health");
-    health.textContent=`ANPR: ${s.inference_state||"неизвестно"} · возраст результата ${((s.inference_age_ms||0)/1000).toFixed(1)} с${s.inference_error?" · "+s.inference_error:""}`;
-    health.style.color=s.inference_state==="running"?"#65df91":"#ffd166";
+    if(epoch!==previewEpoch){setTimeout(status,0);return;}
+    const readings=s.readings;
+    if(readings){document.getElementById('recognition-counts').textContent=`Статистика (~1 с): детекций за прогон ${readings.detections} · Непустой OCR: ${readings.ocr_readings} · Уникальных подтверждённых событий: ${readings.unique_confirmed_events??'н/д'} · GT: проверено ${readings.evaluated??0}, правильно ${readings.correct??'н/д'} · Точность не оценена`;}
+    if(s.inference_error)document.getElementById('anpr-health').textContent='Ошибка инференса: '+s.inference_error;
     targetFPS=Math.min(30,Math.max(1,s.target_fps||20));
-    plates.replaceChildren();
-    if(s.available){for(const p of s.plates){const li=document.createElement('li');li.textContent=`${p.text||'Не прочитан'} · ${(p.confidence*100).toFixed(1)}% · ${p.confirmed?'Подтверждён':'Ожидает подтверждения'}`;plates.append(li)}}
-    else if(performance.now()-lastDisplay>2000){lost.style.display='grid';state.textContent='Нет сигнала';displayTimes=[]}
+    if(!s.available && performance.now()-lastDisplay>2000){lost.style.display='grid';state.textContent='Нет сигнала';displayTimes=[];renderCurrent([],null)}
   }catch{if(performance.now()-lastDisplay>2000){state.textContent='API недоступен';lost.style.display='grid'}}
   setTimeout(status,1000);
 }
@@ -78,7 +147,7 @@ if(debugEnabled){
   document.getElementById('diagnostics').hidden=false;
   let report=null,sampleImage=null,page=0,paused=false,selected=null;
   const debugState=document.getElementById('debug-state'),frame=document.getElementById('debug-frame'),crop=document.getElementById('debug-crop');
-  const reasons={detector_confidence:'Ниже порога YOLO',nms_or_max_detections:'NMS или лимит детекций',box_too_small:'Слишком маленький box',invalid_prediction:'Некорректный выход модели',unreadable_subtype:'Нечитаемый subtype',ocr_confidence:'Ниже порога OCR',rover_format:'Не соответствует формату ровера',insufficient_confirmations:'Недостаточно подтверждений',confirmed_number_mismatch:'Ожидание подтверждения смены номера',confirmed_label_missing_from_history:'Подтверждённый текст отсутствует в истории'};
+  const reasons={unknown_or_conflicting_characters:'Неизвестные или конфликтующие символы',detector_confidence:'Ниже порога YOLO',nms_or_max_detections:'NMS или лимит детекций',box_too_small:'Слишком маленький box',invalid_prediction:'Некорректный выход модели',unreadable_subtype:'Нечитаемый subtype',ocr_confidence:'Ниже порога OCR',rover_format:'Не соответствует формату ровера',insufficient_confirmations:'Недостаточно подтверждений',confirmed_number_mismatch:'Ожидание подтверждения смены номера',confirmed_label_missing_from_history:'Подтверждённый текст отсутствует в истории'};
   const reasonText=value=>reasons[value]||value;
   function drawSample(){
     if(!sampleImage||!report)return;
@@ -100,7 +169,7 @@ if(debugEnabled){
     const container=document.getElementById('debug-plates');container.replaceChildren();
     for(const p of report.plates||[]){
       const card=document.createElement('article');card.style.padding='12px';card.style.borderBottom='1px solid #385064';
-      const line=document.createElement('p');line.textContent=`ID ${p.raw_id} · YOLO ${Number(p.detection_confidence).toFixed(3)} · raw OCR «${p.raw_text}» → «${p.text}» · OCR ${p.ocr_confidence.toFixed(3)} · readable ${p.readable} · subtype ${p.subtype} · формат модели ${p.model_format_valid} · формат ровера ${p.rover_format_valid} · ${p.status} · голоса ${p.confirmations}/${p.required||report.thresholds.min_confirmations} · ${p.reasons.map(reasonText).join('; ')||'Принят'} · исходный размер ${p.original_size.map(x=>x.toFixed(1)).join('×')} px · на входе YOLO ≈ ${p.detector_size.map(x=>x.toFixed(1)).join('×')} px`;
+      const line=document.createElement('p');line.textContent=`ID ${p.raw_id} · YOLO ${Number(p.detection_confidence).toFixed(3)} · raw OCR «${p.raw_text}» → «${p.text}» · OCR ${p.ocr_confidence.toFixed(3)} · readable ${p.readable} · subtype ${p.subtype} · формат модели ${p.model_format_valid} · формат ровера ${p.rover_format_valid} · итог «${p.merged_text??p.text}» · ${p.recognition_status||p.status} · track ${p.track_id??"—"} · голоса ${p.confirmations}/${p.required||report.thresholds.min_confirmations} · ${p.reasons.map(reasonText).join('; ')||'Принят'} · исходный размер ${p.original_size.map(x=>x.toFixed(1)).join('×')} px · на входе YOLO ≈ ${p.detector_size.map(x=>x.toFixed(1)).join('×')} px`;
       card.append(line);
       if(p.patch_png?.startsWith('data:image/png;base64,')){const img=document.createElement('img');img.src=p.patch_png;img.alt='Точный нормализованный вход OCR';img.style.maxWidth='100%';card.append(img)}
       container.append(card);
@@ -126,5 +195,58 @@ if(debugEnabled){
   }
   debugRefresh();
 }
+async function history(){
+  const list=document.getElementById('history');
+  try{
+    const response=await fetch('/history?include_partial=true',{cache:'no-store',signal:AbortSignal.timeout(2000)});
+    if(!response.ok)throw Error();
+    const data=await response.json();list.replaceChildren();
+    for(const p of data.detections.slice(0,50)){
+      const li=document.createElement('li');
+      li.textContent=`${p.plate} · ${p.status} · ${p.detected_at}`;list.append(li);
+    }
+  }catch{list.textContent='История недоступна'}
+  setTimeout(history,1000);
+}
+if(isDemo){
+ document.querySelector('h1').textContent=demoLane;
+ const technical=document.getElementById('technical');technical.append(document.getElementById('timing'),document.getElementById('anpr-health'));
+ document.getElementById('demo-controls').hidden=false;
+ document.getElementById('history').closest('details').hidden=true;
+ let runId=null,loaded=false;
+ const select=document.getElementById('demo-video');
+ function resetDemo(){
+   previewEpoch++;clearCards();renderCurrent([],null);
+   document.getElementById('recognition-counts').textContent='Детекций за прогон: 0 · OCR: 0 · Уникальных подтверждённых событий: 0 · Точность не оценена';
+   context.clearRect(0,0,canvas.width,canvas.height);after=0;afterFrame=0;displayTimes=[];
+ }
+
+ window.addEventListener('message',event=>{
+  if(event.origin!==location.origin || event.source!==window.parent || event.data?.type!=='rover-demo-reset')return;
+  if(event.data.run_id!==runId){runId=event.data.run_id;resetDemo()}
+ });
+ async function demoAction(action){
+  try{const r=await fetch('/live/demo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,video_id:select.value,channel:demoLane})});if(!r.ok)throw Error(await r.text());const d=await r.json();if(d.control.run_id!==runId){runId=d.control.run_id;resetDemo()}}
+  catch(e){document.getElementById('demo-info').textContent='Ошибка запуска: '+e.message}
+ }
+ document.getElementById('demo-start').onclick=()=>demoAction('start');
+ document.getElementById('demo-pause').onclick=()=>demoAction('pause');
+ document.getElementById('demo-restart').onclick=()=>demoAction('restart');
+ select.onchange=()=>demoAction('select');
+ async function demoRefresh(){
+  try{
+   const r=await fetch('/live/demo?channel='+demoLane,{cache:'no-store',signal:AbortSignal.timeout(2000)});if(!r.ok)throw Error();const d=await r.json();
+   if(!loaded){select.replaceChildren();for(const v of d.videos){const option=document.createElement('option');option.value=v.id;option.textContent=v.name;select.append(option)}select.value=d.videos.find(v=>v.name.startsWith(demoLane+'/'))?.id||d.videos[0]?.id;loaded=true}
+   if(d.control?.video_id!=null)select.value=d.control.video_id;
+   if(d.control?.run_id!==runId){runId=d.control?.run_id;resetDemo()}
+   const s=d.status||{},c=d.control||{};document.documentElement.dataset.runId=c.run_id||'';
+   const phase=c.state==='paused'?'Пауза':s.phase==='ended'?'Видео завершено — Restart для повтора':s.phase==='error'?'Ошибка: '+s.error:c.state==='playing'?'Воспроизведение':'Ожидание Start';
+   document.getElementById('demo-state').textContent=`${phase} · ${(s.media_time_s||0).toFixed(1)} с · lag ${((s.lag_ms||0)/1000).toFixed(1)} с · ${c.sync_group?'общий таймлайн':'независимо'}`;
+   document.getElementById('demo-info').textContent=`${phase} · ${(s.media_time_s||0).toFixed(1)} / ${(s.duration_s||0).toFixed(1)} с · Обработано ${s.processed_frames||0} кадров · Источник ${s.source_fps==null?'н/д':s.source_fps.toFixed(1)} FPS · ANPR ${s.anpr_fps?.toFixed(1)??'н/д'} FPS · Отставание ${(s.lag_ms||0).toFixed(0)} мс · Пропущено обработкой ${s.skipped_processing_frames??0} · Пропущено превью ${s.dropped_preview??0}`;
+   if(window.parent===window){const m=await (await fetch('/live/system',{signal:AbortSignal.timeout(2000)})).json();
+   const pc=v=>v==null?'н/д':v.toFixed(1)+'%';document.getElementById('demo-resources').textContent=`CPU ${pc(m.cpu_percent)} · GPU ${pc(m.gpu_percent)} · RAM ${m.ram_used_bytes==null?'н/д':(m.ram_used_bytes/1024**3).toFixed(1)+' ГБ'} · Точность не оценена — нет Ground Truth`;}
+  }catch{document.getElementById('demo-info').textContent='API недоступен'}finally{setTimeout(demoRefresh,1000)}
+ }demoRefresh();
+}else{history()}
 preview();status();
 </script></html>

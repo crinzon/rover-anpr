@@ -1,0 +1,51 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><title>Rover ANPR · Two cameras</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#101820;color:#edf3f7;font:16px system-ui}header{padding:12px}main{display:grid;grid-template-columns:1fr 1fr}iframe{width:100%;height:90vh;border:0}h2{text-align:center}@media(max-width:1000px){main{grid-template-columns:1fr}}html,body{height:100%;overflow:hidden}body{display:flex;flex-direction:column;font-size:13px}header{height:30px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:5px 10px}#system-metrics{height:18px;padding:3px 10px!important;flex:none;font-size:12px}main{flex:1;min-height:0;gap:8px;padding:6px;box-sizing:border-box}main>section{min-height:0;display:flex;flex-direction:column;border:1px solid #304454;border-radius:8px;overflow:hidden}h2{font-size:15px;height:22px;line-height:22px;margin:0;flex:none;background:#182a36}iframe{flex:1;min-height:0;height:auto}button{padding:4px 8px}#pair-state{font-size:11px;color:#adc6d5;margin-left:8px}@media(max-width:1000px){main{grid-template-columns:1fr 1fr}}</style><header><strong>Rover ANPR</strong><div id="pair-controls" hidden><button id="start-all">Start All — 3 Pairs</button> <button id="pause-all">Pause All</button> <button id="stop-all">Stop All</button> <button id="start-both">Start Both</button> <button id="pause-both">Pause Both</button> <button id="restart-both">Restart Both</button><span id="pair-state"></span></div></header><div id="all-summary" hidden style="height:22px;flex:none;padding:2px 10px;font-size:12px;white-space:nowrap"><span id="all-state"></span> <progress id="all-progress" max="100" value="0" style="width:100px"></progress> <span id="all-totals"></span></div><div id="system-metrics" style="padding:8px 12px">CPU / GPU / RAM: ожидание измерения</div><main><section><h2>Front · 192.168.77.202</h2><iframe title="Front" src="/live?camera=Front"></iframe></section><section><h2>Back · 192.168.77.201</h2><iframe title="Back" src="/live?camera=Back"></iframe></section></main><script>
+fetch('/live/demo',{cache:'no-store'}).then(r=>r.json()).then(d=>{
+ if(!d.enabled)return;
+ document.getElementById('pair-controls').hidden=false;
+ const frames=document.querySelectorAll('iframe'),heads=document.querySelectorAll('h2');
+ for(const [i,name] of ['Front','Back'].entries()){heads[i].textContent=name+' · VIDEO DEMO';frames[i].src='/live?camera=Demo'+name}
+}).catch(()=>{});
+async function paired(action){
+ const videos={};for(const f of document.querySelectorAll('iframe')){const value=f.contentDocument?.getElementById('demo-video')?.value;if(value)videos[f.title]=value}
+ const label=document.getElementById('pair-state');label.textContent='Подготовка...';
+ try{const r=await fetch('/live/demo/both',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,videos})});if(!r.ok)throw Error(await r.text());const data=await r.json();for(const f of document.querySelectorAll('iframe')){const id=data[f.title]?.control.run_id;if(id && id!==f.contentDocument?.documentElement.dataset.runId)f.contentWindow.postMessage({type:'rover-demo-reset',run_id:id},location.origin)}label.textContent=action==='pause'?'Пауза обоих потоков':'Общий таймлайн по PTS; без пропуска кадров'}
+ catch(e){label.textContent='Ошибка: '+e.message}
+}
+document.getElementById('start-both').onclick=()=>paired('start');document.getElementById('pause-both').onclick=()=>paired('pause');document.getElementById('restart-both').onclick=()=>paired('restart');
+let allState='idle';
+async function allAction(action){
+ const buttons=['start-all','pause-all','stop-all'].map(id=>document.getElementById(id));
+ buttons.forEach(b=>b.disabled=true);
+ try{const response=await fetch('/live/demo/all',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});if(!response.ok)throw Error(await response.text());renderAll(await response.json())}
+ catch(error){document.getElementById('pair-state').textContent='Ошибка: '+error.message}
+ finally{buttons.forEach(b=>b.disabled=false)}
+}
+function renderAll(d){
+ if(!d.enabled)return;
+ allState=d.state;
+ document.getElementById('all-summary').hidden=false;
+ document.getElementById('pause-all').textContent=d.state==='paused'?'Resume All':'Pause All';
+ const phase={idle:'Ожидание',playing:'Воспроизведение',paused:'Пауза',stopped:'Остановлено',completed:'Демонстрация завершена',error:'Ошибка',interrupted:'Прервано'}[d.state]||d.state;
+ document.getElementById('all-state').textContent=`${phase} · ${d.pair_number||0}/3 · ${(d.progress_percent||0).toFixed(1)}%`;
+ document.getElementById('all-progress').value=d.progress_percent||0;
+ const t=d.totals||{},c=d.current_pair_totals||{};
+ document.getElementById('all-totals').textContent=`Всего: ${t.processed_frames||0} кадров · ${t.detection_count||0} детекций · ${t.unique_confirmed_events||0} CONFIRMED-событий | Пара: ${c.processed_frames||0} кадров · ${c.detection_count||0} детекций`;
+ document.getElementById('pair-state').textContent=(d.state==='error'||d.state==='interrupted')?(d.message||phase):(d.message||'');
+ if(d.run_ids)for(const f of document.querySelectorAll('iframe')){
+  const id=d.run_ids[f.title];if(id&&id!==f.contentDocument?.documentElement.dataset.runId)f.contentWindow.postMessage({type:'rover-demo-reset',run_id:id},location.origin);
+ }
+}
+document.getElementById('start-all').onclick=()=>allAction('start');
+document.getElementById('pause-all').onclick=()=>allAction(allState==='paused'?'resume':'pause');
+document.getElementById('stop-all').onclick=()=>allAction('stop');
+async function allRefresh(){
+ try{const r=await fetch('/live/demo/all',{cache:'no-store',signal:AbortSignal.timeout(2000)});if(r.ok)renderAll(await r.json())}
+ catch{}finally{setTimeout(allRefresh,1000)}
+}allRefresh();
+async function systemRefresh(){
+ const el=document.getElementById('system-metrics');
+ try{const r=await fetch('/live/system',{cache:'no-store',signal:AbortSignal.timeout(2000)});if(!r.ok)throw Error();const s=await r.json();
+ const percent=v=>v==null?'н/д':v.toFixed(1)+'%';
+ el.textContent=`CPU ${percent(s.cpu_percent)} · GPU ${percent(s.gpu_percent)} · RAM ${s.ram_used_bytes==null?'н/д':(s.ram_used_bytes/1024**3).toFixed(1)+' / '+(s.ram_total_bytes/1024**3).toFixed(1)+' ГБ'}`;
+ }catch{el.textContent='Системные метрики недоступны'}finally{setTimeout(systemRefresh,1500)}
+}systemRefresh();</script></html>

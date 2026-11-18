@@ -8,7 +8,7 @@ def load_env():
     settings = {}
     path = Path(__file__).resolve().parent / ".env"
     if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue

@@ -38,7 +38,7 @@ def describe_plate(
     plate, ocr_threshold, source_width, detector_size, source_height=0
 ):
     text = normalize_plate(plate["text"])
-    valid = is_valid_plate(text)
+    valid = is_valid_plate(text, plate.get("subtype", "type1"))
     reasons = []
     if not plate["readable"]:
         reasons.append("unreadable_subtype")
@@ -180,6 +180,9 @@ class Diagnostics:
                 for p in plates
             ),
             confirmed=sum(p["status"] == "confirmed" for p in plates),
+            partial=sum(
+                p.get("recognition_status") == "PARTIAL" for p in plates
+            ),
         )
         self._write(
             dict(

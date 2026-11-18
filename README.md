@@ -34,3 +34,22 @@ make purge
 `COMPOSE_FILES="-f compose.yaml"` при `install` и `run`.
 
 Веб-интерфейс: **http://localhost:8000/live**.
+
+`GET /plates` возвращает актуальные треки с индивидуальным сроком жизни.
+Пиксельные смещения, время кадра и совместимость старых отправителей
+описаны в [API-контракте](docs/api-contract.md).
+
+## Обработка записей робота
+
+В локальном Python-окружении с зависимостями и двумя моделями:
+
+```bash
+python process_video.py --input test_videos --output results --device cpu
+```
+
+CLI рекурсивно обрабатывает MP4/MOV без API, сохраняет структуру каталогов,
+размеченные MP4 и JSON/CSV. Для NVIDIA используйте `--device cuda`.
+Существующие результаты не перезаписываются.
+[Временные метки, отчёты, ограничения и проверки](docs/video-processing.md).
+
+[Проверенные форматы, PARTIAL/CONFIRMED и ограничения](docs/plate-formats.md).

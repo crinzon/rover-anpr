@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import database
+from current_plates import CurrentPlates
 from event_sender import EventSender
 
 
@@ -123,7 +124,8 @@ class ApiContractTest(unittest.TestCase):
     def test_confirmed_event_history_position_and_expiry(self):
         import api
 
-        previous = api.latest_plates, api.last_detection_time
+        previous = api.current_plates
+        api.current_plates = CurrentPlates(wall_clock=lambda: 1000)
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(database, "DB_PATH", Path(directory) / "api.db"):
                 database.init_db()
@@ -137,7 +139,9 @@ class ApiContractTest(unittest.TestCase):
                 )
                 try:
                     self.assertEqual(api.update_plates({})["status"], "error")
-                    with patch("api.time.monotonic", return_value=10):
+                    with patch.object(
+                        api.current_plates, "monotonic_clock", return_value=10
+                    ):
                         for _ in range(2):
                             self.assertEqual(
                                 api.update_plates(
@@ -145,12 +149,18 @@ class ApiContractTest(unittest.TestCase):
                                 ),
                                 {"status": "ok"},
                             )
-                        self.assertEqual(api.get_plates()["plates"], [event])
-                    with patch("api.time.monotonic", return_value=13):
+                        rows = api.get_plates()["plates"]
+                        self.assertEqual(len(rows), 1)
+                        for key, value in event.items():
+                            self.assertEqual(rows[0][key], value)
+                        self.assertEqual(rows[0]["received_at"], 1000)
+                    with patch.object(
+                        api.current_plates, "monotonic_clock", return_value=13
+                    ):
                         self.assertEqual(api.get_plates(), {"plates": []})
                     history = api.get_history()["detections"]
                     self.assertEqual(len(history), 1)
                     self.assertEqual(history[0]["plate"], "A123AA77")
                     self.assertNotIn("position", history[0])
                 finally:
-                    api.latest_plates, api.last_detection_time = previous
+                    api.current_plates = previous
