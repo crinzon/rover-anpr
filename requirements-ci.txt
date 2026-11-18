@@ -1,0 +1,6 @@
+# Lightweight Linux checks: no GUI, Torch, CUDA or neural-model packages.
+-r requirements-dev.txt
+-r docker/api/requirements.txt
+# Match the existing camera dependency versions without its GUI wheel.
+numpy==2.4.6
+opencv-python-headless==5.0.0.93

@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install -r requirements-dev.txt -r docker/api/requirements.txt
+      - run: pip install -r requirements-ci.txt
       - run: make check
         env:
           DB_PATH: /tmp/rover-release-test.db
@@ -25,7 +25,7 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$(cat VERSION)"
           git archive --format=tar.gz --prefix=rover-anpr/ --output=rover-anpr-source.tar.gz HEAD -- \
             README.md VERSION Makefile .env.example .gitignore .dockerignore .gitattributes \
-            pyproject.toml requirements.txt requirements-dev.txt .githooks .github \
+            pyproject.toml requirements.txt requirements-dev.txt requirements-ci.txt .githooks .github \
             download_models.py \
             camera.py video_stream.py video_settings.py plate_validator.py plate_formats.py plate_evidence.py event_sender.py \
             api.py database.py current_plates.py vehicle_registry.py live_preview.py anpr_diagnostics.py check_rtsp.py \
