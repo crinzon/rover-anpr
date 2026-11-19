@@ -31,17 +31,8 @@ def write_csv(path, rows, fields):
 
 def clock(seconds):
     milliseconds = round(seconds * 1000)
-    return f"{
-        milliseconds //
-        3600000:02}:{
-        milliseconds //
-        60000 %
-        60:02}:{
-            milliseconds //
-            1000 %
-            60:02}.{
-                milliseconds %
-        1000:03}"
+    return f"{milliseconds // 3600000:02}:{milliseconds // 60000 % 60:02}:{
+        milliseconds // 1000 % 60:02}.{milliseconds % 1000:03}"
 
 
 def confirmed_text(row):
